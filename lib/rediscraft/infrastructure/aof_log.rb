@@ -1,21 +1,18 @@
 # frozen_string_literal: true
 
 require "fileutils"
-require "rediscraft/interface/text_protocol"
-
 module Rediscraft
   module Infrastructure
     class AofLog
-      def initialize(path:, protocol: Rediscraft::Interface::TextProtocol.new)
+      def initialize(path:)
         @path = path
-        @protocol = protocol
         @mutex = Mutex.new
         FileUtils.mkdir_p(File.dirname(path))
       end
 
       def append(parts)
         @mutex.synchronize do
-          File.open(@path, "a") do |file|
+          File.open(@path, "ab") do |file|
             file.write(encode(parts))
             file.flush
           end
@@ -25,10 +22,13 @@ module Rediscraft
       def replay(store)
         return unless File.exist?(@path)
 
-        File.foreach(@path) do |line|
-          next unless line.end_with?("\n")
+        File.open(@path, "rb") do |file|
+          while (payload = read_frame(file))
+            parts = decode(payload)
+            next if parts.nil?
 
-          apply_record(store, @protocol.parse(line))
+            apply_record(store, parts)
+          end
         end
       end
 
@@ -52,7 +52,55 @@ module Rediscraft
       end
 
       def encode(parts)
-        "#{parts.join(" ")}\n"
+        encoded_parts = parts.map do |part|
+          value = part.to_s
+          "#{value.bytesize} #{value}"
+        end
+
+        payload = "*#{parts.length} #{encoded_parts.join(" ")}"
+        "@#{payload.bytesize}\n#{payload}"
+      end
+
+      def decode(source)
+        cursor = 0
+        return nil unless source.start_with?("*")
+
+        count_text, cursor = read_token(source, 1)
+        count = Integer(count_text, 10)
+
+        count.times.map do
+          length_text, cursor = read_token(source, cursor)
+          length = Integer(length_text, 10)
+          value = source.byteslice(cursor, length)
+          return nil if value.nil? || value.bytesize != length
+
+          cursor += length
+          cursor += 1 if source.byteslice(cursor, 1) == " "
+          value
+        end
+      rescue ArgumentError
+        nil
+      end
+
+      def read_token(source, cursor)
+        ending = source.index(" ", cursor)
+        raise ArgumentError, "missing token" if ending.nil?
+
+        [source.byteslice(cursor, ending - cursor), ending + 1]
+      end
+
+      def read_frame(file)
+        header = file.gets
+        return nil if header.nil?
+        return nil unless header.start_with?("@") && header.end_with?("\n")
+
+        length = Integer(header[1..].strip, 10)
+        payload = file.read(length)
+        return nil if payload.nil? || payload.bytesize != length
+
+        payload
+      rescue ArgumentError
+        nil
       end
     end
   end

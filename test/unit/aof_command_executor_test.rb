@@ -27,7 +27,13 @@ class AofCommandExecutorTest < Minitest::Test
       executor.execute(["UNKNOWN"])
 
       assert_equal \
-        "SET name Ada\nDEL name\nDEL missing\nSET session abc\nEXPIREAT session 1767268860\n",
+        [
+          "@21\n*3 3 SET 4 name 3 Ada",
+          "@15\n*2 3 DEL 4 name",
+          "@18\n*2 3 DEL 7 missing",
+          "@24\n*3 3 SET 7 session 3 abc",
+          "@37\n*3 8 EXPIREAT 7 session 10 1767268860"
+        ].join,
         File.read(path)
     end
   end
@@ -36,7 +42,7 @@ class AofCommandExecutorTest < Minitest::Test
     Dir.mktmpdir do |dir|
       path = File.join(dir, "rediscraft.aof")
       now = Time.utc(2026, 1, 1, 12, 0, 0)
-      File.write(path, "SET name Ada\nEXPIREAT name 1767268860\npartial")
+      File.write(path, "@21\n*3 3 SET 4 name 3 Ada@37\n*3 8 EXPIREAT 4 name 10 1767268860@99\npartial")
 
       store = Rediscraft::Domain::Store.new(clock: -> { now })
       aof = Rediscraft::Infrastructure::AofLog.new(path: path)
@@ -45,6 +51,23 @@ class AofCommandExecutorTest < Minitest::Test
 
       assert_equal "Ada", store.get("name")
       assert_equal 60, store.ttl("name")
+    end
+  end
+
+  def test_replays_values_without_losing_spaces_or_newlines
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "rediscraft.aof")
+      store = Rediscraft::Domain::Store.new
+      inner = Rediscraft::Application::CommandExecutor.new(store: store)
+      aof = Rediscraft::Infrastructure::AofLog.new(path: path)
+      executor = Rediscraft::Application::AofCommandExecutor.new(inner: inner, aof: aof)
+
+      executor.execute(["SET", "message", " leading\nand trailing "])
+
+      replayed_store = Rediscraft::Domain::Store.new
+      aof.replay(replayed_store)
+
+      assert_equal " leading\nand trailing ", replayed_store.get("message")
     end
   end
 
