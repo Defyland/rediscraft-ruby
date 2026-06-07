@@ -69,6 +69,6 @@ after the repository has a stable command set.
 | --- | --- | --- | --- |
 | Product problem is explicit | README.md | Done | Names backend learning as the product problem. |
 | Domain can execute basic commands | test/unit/command_executor_test.rb | Partial | `PING`, `SET`, and `GET` covered first. |
-| TCP protocol is implemented | test/integration | Planned | Added after application behavior. |
-| AOF replay is implemented | test/unit | Planned | Added after command set stabilizes. |
-| Quality review is recorded | docs/learning-journal.md | Planned | Required before final handoff. |
+| TCP protocol is implemented | test/integration/tcp_server_test.rb | Done | Uses real TCP sockets. |
+| AOF replay is implemented | test/unit/aof_command_executor_test.rb | Done | Includes partial trailing line behavior. |
+| Quality review is recorded | docs/learning-journal.md | Partial | Structural/Ruby review recorded; no external reviewer. |

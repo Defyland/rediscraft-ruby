@@ -1,0 +1,9 @@
+openapi: 3.1.0
+info:
+  title: Rediscraft Ruby
+  version: 0.1.0
+  description: >
+    Rediscraft does not expose an HTTP API. The executable interface is a TCP
+    text protocol documented in docs/api/protocol.md. This file exists only to
+    make the non-HTTP boundary explicit in workspace scans.
+paths: {}
