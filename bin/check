@@ -1,0 +1,12 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+root = File.expand_path("..", __dir__)
+syntax_files = Dir[File.join(root, "{bin,lib,test}/**/*")].select { |path| File.file?(path) }
+syntax_files.select! { |path| File.extname(path) == ".rb" || File.read(path, 20).include?("ruby") }
+
+syntax_files.each do |path|
+  system("ruby", "-c", path, out: File::NULL) or abort "Syntax check failed: #{path}"
+end
+
+system(File.join(root, "bin/test")) or abort "Tests failed"

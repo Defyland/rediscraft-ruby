@@ -1,0 +1,128 @@
+# Rediscraft Ruby
+
+## 1. What is this product?
+
+Rediscraft Ruby is a Redis-like in-memory key-value server built from scratch in
+CRuby. It is a study repository for backend engineers who want to understand the
+mechanics behind cache servers: command parsing, TCP clients, shared mutable
+state, TTL expiration, append-only persistence, and recovery.
+
+## 2. Problem it solves
+
+Backend engineers often use Redis without seeing the hidden costs behind simple
+commands. Rediscraft makes those mechanics explicit in a small Ruby codebase
+that can be read in order and extended one feature at a time.
+
+## 3. Target users
+
+The main user is a backend engineer studying storage, networking, and
+operability fundamentals. The repository is not a Redis replacement.
+
+## 4. Main features
+
+- Text protocol over TCP.
+- Commands: `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`,
+  and `QUIT`.
+- Thread-safe in-memory store.
+- Lazy TTL expiration.
+- Append-only file persistence with replay on startup.
+- Minitest coverage for domain, application, protocol, server, and AOF behavior.
+
+## 5. Architecture overview
+
+Rediscraft keeps the code split by responsibility:
+
+- `lib/rediscraft/domain`: key/value state and TTL rules.
+- `lib/rediscraft/application`: command execution use case.
+- `lib/rediscraft/infrastructure`: AOF persistence.
+- `lib/rediscraft/interface`: TCP protocol and server adapter.
+
+The TCP layer parses input and formats output. The application layer executes
+commands. The domain owns value and expiration behavior.
+
+## 6. Tech stack
+
+- Ruby 3.4.x, CRuby.
+- Ruby standard library: `socket`, `thread`, `time`, and `minitest`.
+- No Rails and no runtime gems.
+
+## 7. Domain model
+
+The core aggregate is a key entry: string key, string value, and optional
+absolute expiration time. Expired entries may remain physically present until a
+read or mutation observes them, but public reads must treat them as missing.
+
+## 8. API documentation
+
+The public API is a TCP text protocol. See [docs/api/protocol.md](docs/api/protocol.md).
+`openapi.yaml` is intentionally not present because this is not an HTTP API.
+
+## 9. Async or event architecture
+
+There is no broker or domain event stream in the current scope. AOF records are
+internal durability records.
+
+## 10. Database design
+
+There is no external database. Live state is an in-memory hash protected by a
+mutex. Durability is provided by append-only command records and startup replay.
+
+## 11. Testing strategy
+
+The suite covers command behavior, TTL invariants, parser/formatter behavior,
+TCP request handling, concurrent clients, and AOF replay.
+
+## 12. Performance benchmarks
+
+Performance work is intentionally deferred until the protocol and durability
+rules are stable. Benchmark methodology is documented in
+[docs/benchmarks/methodology.md](docs/benchmarks/methodology.md).
+
+## 13. Observability
+
+The first slice exposes no metrics. The next observability step is a small
+`INFO` command with counters before Prometheus or tracing.
+
+## 14. Security considerations
+
+The server has no authentication and should bind only to trusted local
+interfaces. See [docs/security/threat-model.md](docs/security/threat-model.md).
+
+## 15. Trade-offs and decisions
+
+Key decisions live under [docs/adr](docs/adr). The first version chooses a text
+protocol before RESP, one process before clustering, and a mutex-protected hash
+before sharding.
+
+## 16. How to run locally
+
+```sh
+ruby bin/rediscraft --host 127.0.0.1 --port 7379 --aof data/rediscraft.aof
+```
+
+Then connect:
+
+```sh
+nc 127.0.0.1 7379
+```
+
+## 17. How to run tests
+
+```sh
+bin/test
+bin/check
+```
+
+## 18. Failure scenarios
+
+- A partial trailing AOF record is ignored during replay.
+- Expired keys are removed lazily when read or mutated.
+- A TCP client disconnect affects only that client thread.
+- The server is not safe for untrusted networks.
+
+## 19. Roadmap
+
+- Add `INFO` counters and admin visibility.
+- Add snapshots after AOF compaction is justified.
+- Replace the text protocol with RESP compatibility.
+- Add simple benchmarks for throughput and memory growth.
