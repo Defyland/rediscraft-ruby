@@ -42,6 +42,11 @@ com `stop`, e a thread podia terminar antes de ser registrada. Isso explicava
 testes variando de tempo. A correcao registrou a thread antes de liberar o
 atendimento do cliente e fez `join` fora do mutex.
 
+Depois que o nucleo ficou estavel, RESP2 foi adicionado como adapter alternativo
+ao protocolo textual. A decisao inicial nao foi apagada: texto por linha
+continua existindo para estudo e comparacao, enquanto RESP2 ensina framing,
+bulk strings e arrays.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -80,9 +85,17 @@ Append antes da mutacao: escolhido depois da revisao para reduzir surpresa em
 caso de falha no arquivo. A alternativa rejeitada foi manter o risco apenas
 documentado.
 
+RESP2 como adapter alternativo: escolhido depois que o texto simples ja tinha
+cumprido o papel de primeira borda TCP. A alternativa rejeitada foi substituir o
+protocolo textual, porque isso apagaria uma etapa importante do aprendizado e
+reduziria a comparacao entre os dois modelos.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
+
+RESP2 e mais realista e binario-safe para bulk strings, mas exige mais codigo de
+framing e torna a leitura manual menos imediata.
 
 Mutex unico e facil de ensinar, mas vira gargalo sob escrita pesada.
 
@@ -121,6 +134,10 @@ thread podia terminar antes de entrar em `@clients`, e `stop` fazia `join`
 segurando `@clients_mutex`. A segunda correcao adicionou um `Queue` como gate de
 inicio e copiou a lista de clientes antes de fazer `join`.
 
+RESP2 entrou apenas depois de o servidor aceitar um contrato comum de protocolo:
+`read_request(io)` e `format(response)`. Essa refatoracao evitou que `TcpServer`
+precisasse conhecer detalhes de parsing de texto ou RESP.
+
 ## 7. Como o TDD foi usado
 
 Red: `test/unit/command_executor_test.rb` falhou por falta de executor.
@@ -158,14 +175,32 @@ Green: `TcpServer` passou a registrar a thread antes de libera-la e a fazer
 `join` fora do mutex. Verificacao: `bin/test` e `bin/check` passaram em cerca de
 0.2s cada no ciclo local.
 
+Red: testes unitarios de RESP2 foram escritos para simple strings, errors,
+integers, bulk strings e arrays.
+Green: `Resp2Protocol` implementou `read_request` e `format` sem tocar dominio
+ou aplicacao.
+
+Red: teste de integracao TCP enviou payload RESP real com bulk string contendo
+CRLF.
+Green: `TcpServer` passou a ler requests pelo adapter de protocolo e a CLI
+ganhou `--protocol text|resp2`.
+
+Red: revisao Ruby/termonuclear do RESP mostrou que null bulk dentro de array de
+comando atravessava como `nil`, colidindo com a semantica de valor ausente do
+dominio.
+Green: `Resp2Protocol` passou a rejeitar arrays de comando com null bulk antes
+de chamar a aplicacao.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
 
 `test/unit/text_protocol_test.rb` protege parsing e tipo de resposta.
 
+`test/unit/resp2_protocol_test.rb` protege parser e formatter RESP2.
+
 `test/integration/tcp_server_test.rb` protege conexao TCP real e clientes
-concorrentes.
+concorrentes, incluindo comando RESP2 real.
 
 `test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
 mutacao e ignorar frame parcial.
@@ -188,7 +223,12 @@ mutacao e ignorar frame parcial.
 | `f65f870` | Threads finalizadas ficavam rastreadas | Cleanup no `ensure` do worker TCP | `bin/test`, `bin/check` |
 | `e247b0c` | Docs precisavam refletir a revisao | Journal e evidencias atualizados | `bin/test`, `bin/check` |
 | `972ac64` | Journal precisava separar historia original de decisao final | Registro historico explicito sem apagar evolucao | `bin/test`, `bin/check` |
-| `PENDING` | `stop` podia disputar mutex com cleanup de clientes | Registro antes do atendimento e join fora do mutex | `bin/test`, `bin/check` |
+| `1bec2ca` | `stop` podia disputar mutex com cleanup de clientes | Registro antes do atendimento e join fora do mutex | `bin/test`, `bin/check` |
+| `3c94c3f` | Faltava protocolo Redis mais realista | Parser/formatter RESP2 | `bin/test`, `bin/check` |
+| `659233c` | TCP lia sempre por linha textual | `TcpServer` passou a ler pelo adapter | `bin/test`, `bin/check` |
+| `915c7d1` | RESP2 ainda nao estava exposto por TCP/CLI | Integracao RESP real e `--protocol resp2` | `bin/test`, `bin/check` |
+| `ba3ab42` | Null bulk RESP atravessava como `nil` | Adapter rejeita arrays de comando com null bulk | `bin/test`, `bin/check` |
+| `PENDING` | Docs precisavam registrar RESP sem apagar texto inicial | Journal e docs de protocolo atualizados | `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -196,6 +236,8 @@ mutacao e ignorar frame parcial.
 - Validacao de comando entra em `Application::CommandExecutor`.
 - Persistencia entra em `Infrastructure`.
 - Parsing e formato de resposta entram em `Interface`.
+- Novo protocolo deve implementar `read_request(io)` e `format(response)` sem
+  mudar dominio ou aplicacao.
 - Teste unitario vem antes de adapter externo.
 
 ## 11. Como adicionar a proxima feature
@@ -228,6 +270,10 @@ Nova revisao encontrou uma melhoria no proprio ajuste de threads: o cleanup
 estava correto em intencao, mas `stop` fazia `join` dentro do lock e havia uma
 corrida entre criar e registrar a thread. Foi corrigido com gate de inicio e
 snapshot da lista antes de `join`.
+
+Revisao Ruby/termonuclear apos RESP encontrou uma melhoria de boundary: null
+bulk de RESP nao deveria virar `nil` dentro da aplicacao, porque `nil` ja
+representa valor ausente em `GET`. Foi corrigido no adapter RESP.
 
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:

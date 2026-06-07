@@ -20,7 +20,7 @@ operability fundamentals. The repository is not a Redis replacement.
 
 ## 4. Main features
 
-- Text protocol over TCP.
+- Text protocol over TCP, plus RESP2 as an alternate protocol adapter.
 - Commands: `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`,
   and `QUIT`.
 - Thread-safe in-memory store.
@@ -54,8 +54,9 @@ read or mutation observes them, but public reads must treat them as missing.
 
 ## 8. API documentation
 
-The public API is a TCP text protocol. See [docs/api/protocol.md](docs/api/protocol.md).
-`openapi.yaml` is intentionally not present because this is not an HTTP API.
+The public API is TCP. The first protocol is a line-oriented text protocol; the
+second is RESP2. See [docs/api/protocol.md](docs/api/protocol.md). `openapi.yaml`
+is intentionally a non-HTTP marker because this is not an HTTP API.
 
 ## 9. Async or event architecture
 
@@ -98,6 +99,7 @@ before sharding.
 
 ```sh
 ruby bin/rediscraft --host 127.0.0.1 --port 7379 --aof data/rediscraft.aof
+ruby bin/rediscraft --host 127.0.0.1 --port 7379 --protocol resp2
 ```
 
 Then connect:
@@ -124,5 +126,6 @@ bin/check
 
 - Add `INFO` counters and admin visibility.
 - Add snapshots after AOF compaction is justified.
-- Replace the text protocol with RESP compatibility.
+- Expand RESP compatibility and add protocol negotiation only if it teaches a
+  concrete boundary lesson.
 - Add simple benchmarks for throughput and memory growth.

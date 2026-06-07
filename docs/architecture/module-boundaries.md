@@ -17,5 +17,6 @@ first slices this is planned for AOF.
 
 ## Interface
 
-`lib/rediscraft/interface` owns TCP sockets and text protocol formatting. It
-should not decide key semantics.
+`lib/rediscraft/interface` owns TCP sockets, text protocol formatting, and RESP2
+formatting. It should not decide key semantics. Protocol adapters expose the
+same `read_request(io)` and `format(response)` shape to `TcpServer`.

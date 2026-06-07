@@ -2,8 +2,8 @@
 
 ## Summary
 
-The first Rediscraft release implements a Ruby stdlib Redis-like server with
-text TCP protocol, concurrent clients, key commands, TTL, AOF, replay, and
+Rediscraft now implements a Ruby stdlib Redis-like server with text TCP protocol,
+RESP2 TCP protocol, concurrent clients, key commands, TTL, AOF, replay, and
 study documentation.
 
 ## Commands Run
@@ -13,8 +13,9 @@ study documentation.
 
 ## Passing Criteria
 
-- Unit tests for command execution, TTL, protocol formatting, and AOF pass.
-- Integration tests for TCP command handling and concurrent clients pass.
+- Unit tests for command execution, TTL, text protocol, RESP2 protocol, and AOF pass.
+- Integration tests for text TCP command handling, RESP2 TCP command handling,
+  and concurrent clients pass.
 - Syntax checks pass through `bin/check`.
 
 ## Partial Criteria
@@ -31,6 +32,7 @@ study documentation.
 
 - AOF append now happens before in-memory mutation for durable commands, but
   there is still no configurable fsync policy.
-- The text protocol is not binary-safe.
+- The text protocol is not binary-safe; RESP2 is the binary-safe adapter for
+  command payloads.
 - Thread-per-client and a single store mutex are learning choices, not high
   throughput production choices.
