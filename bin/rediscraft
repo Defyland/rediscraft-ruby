@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
+require "optparse"
+require "rediscraft/application/command_executor"
+require "rediscraft/domain/store"
+require "rediscraft/interface/tcp_server"
+
+options = {
+  host: "127.0.0.1",
+  port: 7379
+}
+
+OptionParser.new do |parser|
+  parser.banner = "Usage: rediscraft [options]"
+  parser.on("--host HOST", "Bind host") { |value| options[:host] = value }
+  parser.on("--port PORT", Integer, "Bind port") { |value| options[:port] = value }
+  parser.on("--aof PATH", "Accepted for future AOF support") { |value| options[:aof] = value }
+end.parse!
+
+store = Rediscraft::Domain::Store.new
+executor = Rediscraft::Application::CommandExecutor.new(store: store)
+server = Rediscraft::Interface::TcpServer.new(
+  host: options[:host],
+  port: options[:port],
+  executor: executor
+)
+
+trap("INT") { server.stop }
+trap("TERM") { server.stop }
+
+puts "rediscraft listening on #{options[:host]}:#{options[:port]}"
+server.start
