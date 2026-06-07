@@ -29,6 +29,50 @@ module Rediscraft
         end
       end
 
+      def delete(key)
+        @mutex.synchronize do
+          live_entry_for(key)
+          @entries.delete(key).nil? ? 0 : 1
+        end
+      end
+
+      def exist?(key)
+        @mutex.synchronize do
+          live_entry_for(key).nil? ? 0 : 1
+        end
+      end
+
+      def expire(key, ttl_seconds)
+        @mutex.synchronize do
+          entry = live_entry_for(key)
+          return 0 if entry.nil?
+
+          @entries[key] = Entry.new(value: entry.value, expires_at: @clock.call + ttl_seconds)
+          1
+        end
+      end
+
+      def ttl(key)
+        @mutex.synchronize do
+          entry = live_entry_for(key)
+          return -2 if entry.nil?
+          return -1 if entry.expires_at.nil?
+
+          remaining = (entry.expires_at - @clock.call).ceil
+          remaining.positive? ? remaining : -2
+        end
+      end
+
+      def persist(key)
+        @mutex.synchronize do
+          entry = live_entry_for(key)
+          return 0 if entry.nil? || entry.expires_at.nil?
+
+          @entries[key] = Entry.new(value: entry.value, expires_at: nil)
+          1
+        end
+      end
+
       private
 
       def live_entry_for(key)

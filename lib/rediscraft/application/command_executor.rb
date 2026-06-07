@@ -19,6 +19,16 @@ module Rediscraft
           execute_set(parts)
         when "GET"
           execute_get(parts)
+        when "DEL"
+          execute_del(parts)
+        when "EXISTS"
+          execute_exists(parts)
+        when "EXPIRE"
+          execute_expire(parts)
+        when "TTL"
+          execute_ttl(parts)
+        when "PERSIST"
+          execute_persist(parts)
         else
           Response.error("ERR unknown command")
         end
@@ -37,6 +47,45 @@ module Rediscraft
         return Response.error("ERR wrong number of arguments for GET") unless parts.length == 2
 
         Response.ok(@store.get(parts[1]))
+      end
+
+      def execute_del(parts)
+        return Response.error("ERR wrong number of arguments for DEL") unless parts.length == 2
+
+        Response.ok(@store.delete(parts[1]))
+      end
+
+      def execute_exists(parts)
+        return Response.error("ERR wrong number of arguments for EXISTS") unless parts.length == 2
+
+        Response.ok(@store.exist?(parts[1]))
+      end
+
+      def execute_expire(parts)
+        return Response.error("ERR wrong number of arguments for EXPIRE") unless parts.length == 3
+
+        ttl_seconds = parse_non_negative_integer(parts[2])
+        return Response.error("ERR invalid expire time") if ttl_seconds.nil?
+
+        Response.ok(@store.expire(parts[1], ttl_seconds))
+      end
+
+      def execute_ttl(parts)
+        return Response.error("ERR wrong number of arguments for TTL") unless parts.length == 2
+
+        Response.ok(@store.ttl(parts[1]))
+      end
+
+      def execute_persist(parts)
+        return Response.error("ERR wrong number of arguments for PERSIST") unless parts.length == 2
+
+        Response.ok(@store.persist(parts[1]))
+      end
+
+      def parse_non_negative_integer(value)
+        Integer(value, 10).then { |number| number.negative? ? nil : number }
+      rescue ArgumentError
+        nil
       end
     end
   end
