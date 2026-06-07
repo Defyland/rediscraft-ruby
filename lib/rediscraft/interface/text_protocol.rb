@@ -7,6 +7,13 @@ module Rediscraft
     class TextProtocol
       VALUE_TAIL_COMMANDS = ["SET"].freeze
 
+      def read_request(io)
+        line = io.gets
+        return nil if line.nil?
+
+        parse(line)
+      end
+
       def parse(line)
         stripped = line.to_s.strip
         return [] if stripped.empty?

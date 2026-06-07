@@ -62,8 +62,7 @@ module Rediscraft
       private
 
       def handle_client(socket)
-        while (line = socket.gets)
-          parts = @protocol.parse(line)
+        while (parts = @protocol.read_request(socket))
 
           if parts.first&.upcase == "QUIT"
             socket.write(@protocol.format(Rediscraft::Application::Response.simple("OK")))
