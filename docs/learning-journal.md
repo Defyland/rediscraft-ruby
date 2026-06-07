@@ -42,8 +42,12 @@ Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
 framework TCP porque esconderiam a parte que o projeto quer ensinar.
 
 Texto por linha antes de RESP: escolhido para permitir leitura facil, testes
-menores e AOF simples. Rejeitado RESP no primeiro corte porque aumentaria o
-escopo antes de comando, TTL e replay estarem claros.
+menores e AOF simples na primeira versao. Rejeitado RESP no primeiro corte
+porque aumentaria o escopo antes de comando, TTL e replay estarem claros.
+
+Registro historico: essa decisao foi boa para o protocolo de cliente, mas fraca
+para AOF. A revisao posterior manteve texto por linha na borda TCP e trocou
+apenas o formato duravel do AOF.
 
 Mutex unico no store: escolhido porque deixa a invariante de estado simples.
 Rejeitado sharding de locks antes de benchmark.
@@ -52,22 +56,33 @@ AOF antes de snapshot: escolhido porque replay de comandos ensina recovery.
 Snapshot foi deixado para depois porque otimiza startup, mas nao substitui a
 licao de durabilidade.
 
-AOF length-prefixed: escolhido depois da revisao porque o formato textual por
-linha era facil de ler, mas perdia informacao em valores com whitespace e
-newline. A alternativa rejeitada foi usar JSON, porque exigiria escaping de
-string e ensinaria menos sobre framing de protocolos.
+Primeiro AOF textual por linha: escolhido porque era a menor forma de aprender
+append e replay. A decisao era defensavel no primeiro recorte, mas ficou fraca
+quando o projeto passou a aceitar valores com whitespace e precisou ensinar
+durabilidade com menos perda de informacao.
 
-Append antes da mutacao: escolhido para reduzir surpresa em caso de falha no
-arquivo. A alternativa rejeitada foi manter o risco apenas documentado.
+AOF length-prefixed: escolhido depois da revisao porque o formato textual por
+linha perdia informacao em valores com whitespace e newline. A alternativa
+rejeitada foi usar JSON, porque exigiria escaping de string e ensinaria menos
+sobre framing de protocolos.
+
+Primeiro append depois da mutacao: escolhido implicitamente porque era o caminho
+mais direto para decorar o executor existente. A revisao mostrou que isso
+ensinava uma fronteira de durabilidade ruim.
+
+Append antes da mutacao: escolhido depois da revisao para reduzir surpresa em
+caso de falha no arquivo. A alternativa rejeitada foi manter o risco apenas
+documentado.
 
 ## 5. Pros e contras das decisoes principais
 
-Texto simples e facil de depurar, mas nao e binario seguro.
+Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
 
 Mutex unico e facil de ensinar, mas vira gargalo sob escrita pesada.
 
-AOF length-prefixed preserva bytes de argumentos melhor que `join/split`, mas e
-menos legivel e ainda cresce sem limite.
+Primeiro AOF textual era mais legivel, mas era lossy. AOF length-prefixed
+preserva bytes de argumentos melhor que `join/split`, mas e menos legivel e
+ainda cresce sem limite.
 
 Thread por cliente e direto, mas nao modela multiplexacao eficiente.
 
@@ -154,7 +169,8 @@ mutacao e ignorar frame parcial.
 | `10ce600` | Store podia mudar antes do append AOF | AOF append antes da mutacao duravel | `bin/test`, `bin/check` |
 | `c41a2ac` | AOF textual perdia informacao | Frames length-prefixed | `bin/test`, `bin/check` |
 | `f65f870` | Threads finalizadas ficavam rastreadas | Cleanup no `ensure` do worker TCP | `bin/test`, `bin/check` |
-| `PENDING` | Docs precisavam refletir a revisao | Journal e evidencias atualizados | `bin/test`, `bin/check` |
+| `e247b0c` | Docs precisavam refletir a revisao | Journal e evidencias atualizados | `bin/test`, `bin/check` |
+| `PENDING` | Journal precisava separar historia original de decisao final | Registro historico explicito sem apagar evolucao | `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -189,3 +205,8 @@ Revisao Ruby/Rails + termonuclear posterior encontrou quatro achados:
 e tracking permanente de threads. Todos foram corrigidos. Risco restante: ainda
 nao existe `fsync` configuravel, limite de conexoes, backpressure ou benchmark
 de contencao.
+
+Importante: o journal deve preservar que as decisoes iniciais existiram e foram
+melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
+o objetivo nao e apresentar uma arquitetura perfeita desde o inicio, mas mostrar
+como testes e revisoes mudaram o desenho.
