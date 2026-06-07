@@ -104,7 +104,8 @@ parcial.
 | `a01282c` | Faltava interface externa | TCP server e protocolo textual | `bin/test`, `bin/check` |
 | `26ae7f6` | Faltava recovery | AOF com replay e `EXPIREAT` | `bin/test`, `bin/check` |
 | `9f86d29` | Formatter confundia valor com status | Tipos explicitos de resposta e AOF mutex | `bin/test`, `bin/check` |
-| `PENDING` | Faltava pacote de documentacao | Journal, case study, docs e CI | `bin/test`, `bin/check` |
+| `b92854d` | Faltava pacote de documentacao | Journal, case study, docs e CI | `bin/test`, `bin/check` |
+| `PENDING` | Timeline precisava do hash final | Atualizacao final do journal | `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
