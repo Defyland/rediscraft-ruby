@@ -8,19 +8,32 @@ require "rediscraft/application/aof_command_executor"
 require "rediscraft/application/command_executor"
 require "rediscraft/domain/store"
 require "rediscraft/infrastructure/aof_log"
+require "rediscraft/interface/resp2_protocol"
+require "rediscraft/interface/text_protocol"
 require "rediscraft/interface/tcp_server"
 
 options = {
   host: "127.0.0.1",
-  port: 7379
+  port: 7379,
+  protocol: "text"
 }
 
 OptionParser.new do |parser|
   parser.banner = "Usage: rediscraft [options]"
   parser.on("--host HOST", "Bind host") { |value| options[:host] = value }
   parser.on("--port PORT", Integer, "Bind port") { |value| options[:port] = value }
+  parser.on("--protocol PROTOCOL", "text or resp2") { |value| options[:protocol] = value }
   parser.on("--aof PATH", "Accepted for future AOF support") { |value| options[:aof] = value }
 end.parse!
+
+protocol = case options[:protocol]
+           when "text"
+             Rediscraft::Interface::TextProtocol.new
+           when "resp2"
+             Rediscraft::Interface::Resp2Protocol.new
+           else
+             abort "Unknown protocol: #{options[:protocol]}"
+           end
 
 store = Rediscraft::Domain::Store.new
 executor = Rediscraft::Application::CommandExecutor.new(store: store)
@@ -34,11 +47,12 @@ end
 server = Rediscraft::Interface::TcpServer.new(
   host: options[:host],
   port: options[:port],
-  executor: executor
+  executor: executor,
+  protocol: protocol
 )
 
 trap("INT") { server.stop }
 trap("TERM") { server.stop }
 
-puts "rediscraft listening on #{options[:host]}:#{options[:port]}"
+puts "rediscraft listening on #{options[:host]}:#{options[:port]} protocol=#{options[:protocol]}"
 server.start

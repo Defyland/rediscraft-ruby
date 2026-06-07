@@ -2,6 +2,7 @@ require "test_helper"
 require "socket"
 require "rediscraft/application/command_executor"
 require "rediscraft/domain/store"
+require "rediscraft/interface/resp2_protocol"
 require "rediscraft/interface/tcp_server"
 
 class TcpServerTest < Minitest::Test
@@ -87,7 +88,43 @@ class TcpServerTest < Minitest::Test
     assert_operator elapsed, :<, 0.2
   end
 
+  def test_handles_resp2_commands_over_tcp
+    resp_server = build_server(protocol: Rediscraft::Interface::Resp2Protocol.new)
+    thread = Thread.new { resp_server.start }
+    sleep 0.05 until resp_server.port
+    socket = TCPSocket.new("127.0.0.1", resp_server.port)
+
+    socket.write("*1\r\n$4\r\nPING\r\n")
+    assert_equal "+PONG\r\n", socket.gets
+
+    socket.write("*3\r\n$3\r\nSET\r\n$7\r\nmessage\r\n$12\r\nhello\r\nworld\r\n")
+    assert_equal "+OK\r\n", socket.gets
+
+    socket.write("*2\r\n$3\r\nGET\r\n$7\r\nmessage\r\n")
+    assert_equal "$12\r\n", socket.gets
+    assert_equal "hello\r\n", socket.gets
+    assert_equal "world\r\n", socket.gets
+
+    socket.write("*1\r\n$4\r\nQUIT\r\n")
+    assert_equal "+OK\r\n", socket.gets
+  ensure
+    socket&.close
+    resp_server&.stop
+    thread&.join(1)
+  end
+
   private
+
+  def build_server(protocol:)
+    store = Rediscraft::Domain::Store.new
+    executor = Rediscraft::Application::CommandExecutor.new(store: store)
+    Rediscraft::Interface::TcpServer.new(
+      host: "127.0.0.1",
+      port: 0,
+      executor: executor,
+      protocol: protocol
+    )
+  end
 
   def wait_until(timeout: 1)
     deadline = Time.now + timeout
