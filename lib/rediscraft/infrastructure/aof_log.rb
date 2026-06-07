@@ -22,17 +22,34 @@ module Rediscraft
         end
       end
 
-      def replay(executor)
+      def replay(store)
         return unless File.exist?(@path)
 
         File.foreach(@path) do |line|
           next unless line.end_with?("\n")
 
-          executor.execute(@protocol.parse(line))
+          apply_record(store, @protocol.parse(line))
         end
       end
 
       private
+
+      def apply_record(store, parts)
+        command = parts.first&.upcase
+
+        case command
+        when "SET"
+          store.set(parts[1], parts[2]) if parts.length == 3
+        when "DEL"
+          store.delete(parts[1]) if parts.length == 2
+        when "EXPIREAT"
+          store.expire_at(parts[1], Time.at(Integer(parts[2], 10)).utc) if parts.length == 3
+        when "PERSIST"
+          store.persist(parts[1]) if parts.length == 2
+        end
+      rescue ArgumentError
+        nil
+      end
 
       def encode(parts)
         "#{parts.join(" ")}\n"

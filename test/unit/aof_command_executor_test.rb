@@ -39,10 +39,9 @@ class AofCommandExecutorTest < Minitest::Test
       File.write(path, "SET name Ada\nEXPIREAT name 1767268860\npartial")
 
       store = Rediscraft::Domain::Store.new(clock: -> { now })
-      executor = Rediscraft::Application::CommandExecutor.new(store: store)
       aof = Rediscraft::Infrastructure::AofLog.new(path: path)
 
-      aof.replay(executor)
+      aof.replay(store)
 
       assert_equal "Ada", store.get("name")
       assert_equal 60, store.ttl("name")

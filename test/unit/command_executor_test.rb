@@ -54,4 +54,11 @@ class CommandExecutorTest < Minitest::Test
     assert_equal 0, @executor.execute(["EXISTS", "session"]).payload
     assert_equal(-2, @executor.execute(["TTL", "session"]).payload)
   end
+
+  def test_expire_at_is_not_a_public_command
+    response = @executor.execute(["EXPIREAT", "session", "1767268860"])
+
+    assert_equal :error, response.status
+    assert_equal "ERR unknown command", response.payload
+  end
 end

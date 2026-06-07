@@ -27,7 +27,7 @@ executor = Rediscraft::Application::CommandExecutor.new(store: store)
 
 if options[:aof]
   aof = Rediscraft::Infrastructure::AofLog.new(path: options[:aof])
-  aof.replay(executor)
+  aof.replay(store)
   executor = Rediscraft::Application::AofCommandExecutor.new(inner: executor, aof: aof)
 end
 
