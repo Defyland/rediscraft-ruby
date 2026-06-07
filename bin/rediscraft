@@ -4,8 +4,10 @@
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
 require "optparse"
+require "rediscraft/application/aof_command_executor"
 require "rediscraft/application/command_executor"
 require "rediscraft/domain/store"
+require "rediscraft/infrastructure/aof_log"
 require "rediscraft/interface/tcp_server"
 
 options = {
@@ -22,6 +24,13 @@ end.parse!
 
 store = Rediscraft::Domain::Store.new
 executor = Rediscraft::Application::CommandExecutor.new(store: store)
+
+if options[:aof]
+  aof = Rediscraft::Infrastructure::AofLog.new(path: options[:aof])
+  aof.replay(executor)
+  executor = Rediscraft::Application::AofCommandExecutor.new(inner: executor, aof: aof)
+end
+
 server = Rediscraft::Interface::TcpServer.new(
   host: options[:host],
   port: options[:port],

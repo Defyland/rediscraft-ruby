@@ -43,11 +43,15 @@ module Rediscraft
       end
 
       def expire(key, ttl_seconds)
+        expire_at(key, @clock.call + ttl_seconds)
+      end
+
+      def expire_at(key, expires_at)
         @mutex.synchronize do
           entry = live_entry_for(key)
           return 0 if entry.nil?
 
-          @entries[key] = Entry.new(value: entry.value, expires_at: @clock.call + ttl_seconds)
+          @entries[key] = Entry.new(value: entry.value, expires_at: expires_at)
           1
         end
       end

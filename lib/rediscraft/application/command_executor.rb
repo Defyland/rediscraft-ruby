@@ -25,6 +25,8 @@ module Rediscraft
           execute_exists(parts)
         when "EXPIRE"
           execute_expire(parts)
+        when "EXPIREAT"
+          execute_expire_at(parts)
         when "TTL"
           execute_ttl(parts)
         when "PERSIST"
@@ -68,6 +70,15 @@ module Rediscraft
         return Response.error("ERR invalid expire time") if ttl_seconds.nil?
 
         Response.ok(@store.expire(parts[1], ttl_seconds))
+      end
+
+      def execute_expire_at(parts)
+        return Response.error("ERR wrong number of arguments for EXPIREAT") unless parts.length == 3
+
+        epoch_seconds = parse_non_negative_integer(parts[2])
+        return Response.error("ERR invalid expire time") if epoch_seconds.nil?
+
+        Response.ok(@store.expire_at(parts[1], Time.at(epoch_seconds).utc))
       end
 
       def execute_ttl(parts)
