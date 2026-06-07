@@ -60,4 +60,26 @@ class TcpServerTest < Minitest::Test
       assert_equal "$6 value#{index}\n", get_response
     end
   end
+
+  def test_removes_finished_client_threads_from_tracking
+    socket = TCPSocket.new("127.0.0.1", @server.port)
+    socket.write("QUIT\n")
+    assert_equal "+OK\n", socket.gets
+    socket.close
+
+    wait_until { @server.tracked_client_count.zero? }
+
+    assert_equal 0, @server.tracked_client_count
+  end
+
+  private
+
+  def wait_until(timeout: 1)
+    deadline = Time.now + timeout
+    until yield
+      raise "condition not reached" if Time.now > deadline
+
+      sleep 0.01
+    end
+  end
 end
