@@ -11,7 +11,9 @@ module Rediscraft
         value = read_value(io)
         return nil if value.nil?
 
-        value.is_a?(Array) ? value.map { |part| part&.to_s } : [value.to_s]
+        return normalize_array(value) if value.is_a?(Array)
+
+        [value.to_s]
       rescue ProtocolError
         nil
       end
@@ -60,6 +62,12 @@ module Rediscraft
         raise ProtocolError, "invalid array length" if count < 0
 
         count.times.map { read_value(io) }
+      end
+
+      def normalize_array(value)
+        return [] if value.any?(&:nil?)
+
+        value.map(&:to_s)
       end
 
       def read_bulk(io)
