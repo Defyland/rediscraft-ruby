@@ -41,7 +41,7 @@ bin/check
 
 ## Deferred Work
 
-- RESP compatibility.
+- Full Redis RESP compatibility beyond the implemented RESP2 command path.
 - Snapshot and compaction.
 - Metrics and `INFO`.
 - Authentication and ACLs.

@@ -18,7 +18,9 @@ interface. This is intentionally lighter than a framework architecture.
 
 ## API Bar
 
-The first API is a TCP text protocol. RESP compatibility is deferred.
+The first API is a TCP text protocol. RESP2 now exists as an alternate protocol
+adapter for the implemented command set. Full Redis protocol compatibility is
+still deferred.
 
 ## Data and Consistency Bar
 
