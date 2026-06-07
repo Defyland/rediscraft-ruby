@@ -31,7 +31,10 @@ module Rediscraft
             break
           end
 
+          start_gate = Queue.new
           thread = Thread.new do
+            start_gate.pop
+
             begin
               handle_client(socket)
             ensure
@@ -39,6 +42,7 @@ module Rediscraft
             end
           end
           @clients_mutex.synchronize { @clients << thread }
+          start_gate << true
         end
       ensure
         @server&.close unless @server&.closed?
@@ -47,7 +51,8 @@ module Rediscraft
       def stop
         @running = false
         @server&.close unless @server&.closed?
-        @clients_mutex.synchronize { @clients.each { |thread| thread.join(1) } }
+        clients = @clients_mutex.synchronize { @clients.dup }
+        clients.each { |thread| thread.join(1) }
       end
 
       def tracked_client_count

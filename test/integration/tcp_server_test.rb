@@ -72,6 +72,21 @@ class TcpServerTest < Minitest::Test
     assert_equal 0, @server.tracked_client_count
   end
 
+  def test_stop_does_not_join_clients_while_holding_tracking_lock
+    socket = TCPSocket.new("127.0.0.1", @server.port)
+    socket.write("QUIT\n")
+    assert_equal "+OK\n", socket.gets
+    socket.close
+
+    wait_until { @server.tracked_client_count.zero? }
+
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    @server.stop
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+
+    assert_operator elapsed, :<, 0.2
+  end
+
   private
 
   def wait_until(timeout: 1)

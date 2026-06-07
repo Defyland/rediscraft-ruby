@@ -36,6 +36,12 @@ saiu da API publica, AOF passou a ser gravado antes da mutacao em memoria, o
 codec do AOF deixou de usar `join/split`, e o servidor TCP passou a remover
 threads finalizadas do rastreamento interno.
 
+Uma revisao posterior encontrou um detalhe ainda mais especifico no servidor
+TCP: a remocao de threads finalizadas existia, mas podia disputar o mesmo mutex
+com `stop`, e a thread podia terminar antes de ser registrada. Isso explicava
+testes variando de tempo. A correcao registrou a thread antes de liberar o
+atendimento do cliente e fez `join` fora do mutex.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -110,6 +116,11 @@ frames length-prefixed.
 O servidor TCP mantinha referencias para threads ja encerradas. Isso foi
 corrigido removendo a thread no `ensure` do worker.
 
+Depois disso, a revisao mostrou que a correcao ainda tinha duas fraquezas: a
+thread podia terminar antes de entrar em `@clients`, e `stop` fazia `join`
+segurando `@clients_mutex`. A segunda correcao adicionou um `Queue` como gate de
+inicio e copiou a lista de clientes antes de fazer `join`.
+
 ## 7. Como o TDD foi usado
 
 Red: `test/unit/command_executor_test.rb` falhou por falta de executor.
@@ -141,6 +152,12 @@ Red: teste de conexao `QUIT` mostrou que threads finalizadas continuavam
 contadas.
 Green: `TcpServer` remove a thread finalizada do tracking no `ensure`.
 
+Red: a revisao de codigo mostrou que `stop` podia esperar segurando o mutex de
+tracking; os checks tambem variavam de segundos para centenas de milissegundos.
+Green: `TcpServer` passou a registrar a thread antes de libera-la e a fazer
+`join` fora do mutex. Verificacao: `bin/test` e `bin/check` passaram em cerca de
+0.2s cada no ciclo local.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
@@ -170,7 +187,8 @@ mutacao e ignorar frame parcial.
 | `c41a2ac` | AOF textual perdia informacao | Frames length-prefixed | `bin/test`, `bin/check` |
 | `f65f870` | Threads finalizadas ficavam rastreadas | Cleanup no `ensure` do worker TCP | `bin/test`, `bin/check` |
 | `e247b0c` | Docs precisavam refletir a revisao | Journal e evidencias atualizados | `bin/test`, `bin/check` |
-| `PENDING` | Journal precisava separar historia original de decisao final | Registro historico explicito sem apagar evolucao | `bin/test`, `bin/check` |
+| `972ac64` | Journal precisava separar historia original de decisao final | Registro historico explicito sem apagar evolucao | `bin/test`, `bin/check` |
+| `PENDING` | `stop` podia disputar mutex com cleanup de clientes | Registro antes do atendimento e join fora do mutex | `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -205,6 +223,11 @@ Revisao Ruby/Rails + termonuclear posterior encontrou quatro achados:
 e tracking permanente de threads. Todos foram corrigidos. Risco restante: ainda
 nao existe `fsync` configuravel, limite de conexoes, backpressure ou benchmark
 de contencao.
+
+Nova revisao encontrou uma melhoria no proprio ajuste de threads: o cleanup
+estava correto em intencao, mas `stop` fazia `join` dentro do lock e havia uma
+corrida entre criar e registrar a thread. Foi corrigido com gate de inicio e
+snapshot da lista antes de `join`.
 
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
