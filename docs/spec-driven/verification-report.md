@@ -29,8 +29,8 @@ study documentation.
 
 ## Remaining Risk
 
-- AOF append happens after store mutation, so a crash between those operations
-  can lose the last write.
+- AOF append now happens before in-memory mutation for durable commands, but
+  there is still no configurable fsync policy.
 - The text protocol is not binary-safe.
 - Thread-per-client and a single store mutex are learning choices, not high
   throughput production choices.

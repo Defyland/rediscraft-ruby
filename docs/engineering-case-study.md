@@ -32,21 +32,22 @@ replay, but grows forever without compaction.
 
 ## 5. Data Model
 
-Live data is a Ruby hash protected by `Mutex`. Durable data is one command per
-line in the AOF. `EXPIRE` is persisted as `EXPIREAT` so restarts preserve the
-absolute expiration time instead of resetting TTL.
+Live data is a Ruby hash protected by `Mutex`. Durable data is a length-prefixed
+AOF frame containing command parts. Public `EXPIRE` is persisted internally as
+`EXPIREAT` so restarts preserve the absolute expiration time instead of
+resetting TTL.
 
 ## 6. Consistency Model
 
 Commands execute in a single process. Store mutation is synchronized by one
-mutex. AOF append is synchronized by a separate mutex and happens after the
-application command succeeds.
+mutex. In AOF mode, durable records are appended before the in-memory mutation
+is applied, so append failure prevents the store from changing.
 
 ## 7. Failure Scenarios
 
-Partial trailing AOF records are ignored. Client disconnects are isolated to the
-client thread. Expired entries are removed lazily. A crash after store mutation
-but before AOF append can lose the last mutation.
+Partial trailing AOF frames are ignored. Client disconnects are isolated to the
+client thread. Finished client threads are removed from tracking. Expired
+entries are removed lazily.
 
 ## 8. Performance Strategy
 
@@ -72,7 +73,8 @@ structured logs are planned after core semantics.
 ## 12. Operational Cost
 
 The operating footprint is one Ruby process and one AOF file. Debug cost remains
-low because the protocol and AOF are human-readable.
+low because the protocol is human-readable and the AOF frame format is small,
+although less readable than plain text lines.
 
 ## 13. Maintainability
 

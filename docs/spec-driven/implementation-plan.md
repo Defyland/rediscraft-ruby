@@ -22,7 +22,7 @@ basic Redis-like commands, TTL, and AOF replay.
 | Commands execute without TCP dependency | `test/unit/command_executor_test.rb` |
 | Store owns TTL behavior | `test/unit/store_test.rb` |
 | TCP adapter handles clients | `test/integration/tcp_server_test.rb` |
-| AOF replays durable state | `test/unit/aof_test.rb` |
+| AOF replays durable state | `test/unit/aof_command_executor_test.rb` |
 | Boundaries are documented | `docs/architecture/module-boundaries.md` |
 
 ## Verification Commands

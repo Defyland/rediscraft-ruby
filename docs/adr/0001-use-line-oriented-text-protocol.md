@@ -22,5 +22,6 @@ Use one text command per line for the first release.
 
 ## Consequences
 
-The protocol is easy to read and replay in AOF. It is not binary-safe and cannot
-represent arbitrary values yet.
+The client protocol is easy to read. AOF now uses a separate length-prefixed
+record format so replay is not limited by the client protocol. The client
+protocol itself is still not binary-safe.

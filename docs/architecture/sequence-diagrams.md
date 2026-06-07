@@ -7,7 +7,8 @@ client -> TcpServer: SET name Ada
 TcpServer -> TextProtocol: parse
 TcpServer -> CommandExecutor: execute
 CommandExecutor -> Store: set
-CommandExecutor -> AofLog: append
+CommandExecutor -> AofLog: append durable frame
+CommandExecutor -> Store: set
 TcpServer -> client: +OK
 ```
 

@@ -31,6 +31,11 @@ Por fim foi adicionado AOF. A primeira versao registrava `EXPIRE key 60`, mas
 isso reiniciaria TTL depois de restart. A correcao registra `EXPIREAT` com
 timestamp absoluto.
 
+Depois da revisao Ruby/termonuclear, quatro pontos foram corrigidos: `EXPIREAT`
+saiu da API publica, AOF passou a ser gravado antes da mutacao em memoria, o
+codec do AOF deixou de usar `join/split`, e o servidor TCP passou a remover
+threads finalizadas do rastreamento interno.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -47,13 +52,22 @@ AOF antes de snapshot: escolhido porque replay de comandos ensina recovery.
 Snapshot foi deixado para depois porque otimiza startup, mas nao substitui a
 licao de durabilidade.
 
+AOF length-prefixed: escolhido depois da revisao porque o formato textual por
+linha era facil de ler, mas perdia informacao em valores com whitespace e
+newline. A alternativa rejeitada foi usar JSON, porque exigiria escaping de
+string e ensinaria menos sobre framing de protocolos.
+
+Append antes da mutacao: escolhido para reduzir surpresa em caso de falha no
+arquivo. A alternativa rejeitada foi manter o risco apenas documentado.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples e facil de depurar, mas nao e binario seguro.
 
 Mutex unico e facil de ensinar, mas vira gargalo sob escrita pesada.
 
-AOF textual e legivel, mas cresce sem limite e precisa de compactacao futura.
+AOF length-prefixed preserva bytes de argumentos melhor que `join/split`, mas e
+menos legivel e ainda cresce sem limite.
 
 Thread por cliente e direto, mas nao modela multiplexacao eficiente.
 
@@ -69,6 +83,18 @@ tipo de resposta explicito em `Rediscraft::Application::Response`.
 AOF inicialmente podia registrar expiracao relativa. Foi corrigido para
 `EXPIREAT`.
 
+`EXPIREAT` inicialmente ficou acessivel ao cliente como comando publico. Isso
+foi corrigido porque era um detalhe interno de replay, nao parte do contrato TCP.
+
+AOF inicialmente acontecia depois da mutacao em memoria. Isso foi corrigido
+para append antes da mutacao em comandos duraveis.
+
+AOF inicialmente usava linhas com `parts.join(" ")`. Isso foi corrigido com
+frames length-prefixed.
+
+O servidor TCP mantinha referencias para threads ja encerradas. Isso foi
+corrigido removendo a thread no `ensure` do worker.
+
 ## 7. Como o TDD foi usado
 
 Red: `test/unit/command_executor_test.rb` falhou por falta de executor.
@@ -83,6 +109,23 @@ Red: teste de AOF falhou por falta de decorator e log.
 Green: `AofCommandExecutor` e `AofLog` gravaram e reproduziram comandos.
 Refactor: `EXPIRE` passou a ser persistido como `EXPIREAT`.
 
+Red: revisao encontrou `EXPIREAT` publico e teste novo mostrou que o comando
+era aceito pelo executor.
+Green: replay passou a aplicar `EXPIREAT` internamente no store e o executor
+publico voltou a responder comando desconhecido.
+
+Red: teste com AOF falso que levanta `IOError` mostrou que o store podia mudar
+sem durabilidade.
+Green: `AofCommandExecutor` passou a gerar e gravar o registro duravel antes de
+chamar o executor interno.
+
+Red: teste com valor contendo newline mostrou que AOF por linha perdia dados.
+Green: `AofLog` passou a usar frames length-prefixed.
+
+Red: teste de conexao `QUIT` mostrou que threads finalizadas continuavam
+contadas.
+Green: `TcpServer` remove a thread finalizada do tracking no `ensure`.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
@@ -92,8 +135,8 @@ Refactor: `EXPIRE` passou a ser persistido como `EXPIREAT`.
 `test/integration/tcp_server_test.rb` protege conexao TCP real e clientes
 concorrentes.
 
-`test/unit/aof_command_executor_test.rb` protege AOF, replay e ignorar linha
-parcial.
+`test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
+mutacao e ignorar frame parcial.
 
 ## 9. Timeline dos commits atomicos
 
@@ -106,6 +149,12 @@ parcial.
 | `9f86d29` | Formatter confundia valor com status | Tipos explicitos de resposta e AOF mutex | `bin/test`, `bin/check` |
 | `b92854d` | Faltava pacote de documentacao | Journal, case study, docs e CI | `bin/test`, `bin/check` |
 | `54846e6` | Timeline precisava do hash final | Atualizacao final do journal | `bin/test`, `bin/check` |
+| `94145b9` | Timeline ainda tinha referencia pendente | Finalizacao do journal | `bin/test`, `bin/check` |
+| `5abec69` | `EXPIREAT` vazava para a API publica | Replay interno aplica `EXPIREAT` sem expor comando | `bin/test`, `bin/check` |
+| `10ce600` | Store podia mudar antes do append AOF | AOF append antes da mutacao duravel | `bin/test`, `bin/check` |
+| `c41a2ac` | AOF textual perdia informacao | Frames length-prefixed | `bin/test`, `bin/check` |
+| `f65f870` | Threads finalizadas ficavam rastreadas | Cleanup no `ensure` do worker TCP | `bin/test`, `bin/check` |
+| `PENDING` | Docs precisavam refletir a revisao | Journal e evidencias atualizados | `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -134,3 +183,9 @@ AOF append sem mutex. Ambos foram corrigidos.
 Revisao Ruby encontrou que o projeto usa stdlib, objetos pequenos e testes
 diretos. O risco restante e performance: thread por cliente e mutex unico sao
 adequados para estudo, nao para alto throughput.
+
+Revisao Ruby/Rails + termonuclear posterior encontrou quatro achados:
+`EXPIREAT` publico sem AOF, mutacao antes de append, AOF lossy por `join/split`,
+e tracking permanente de threads. Todos foram corrigidos. Risco restante: ainda
+nao existe `fsync` configuravel, limite de conexoes, backpressure ou benchmark
+de contencao.
