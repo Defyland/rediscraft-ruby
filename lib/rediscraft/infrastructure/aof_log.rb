@@ -9,13 +9,16 @@ module Rediscraft
       def initialize(path:, protocol: Rediscraft::Interface::TextProtocol.new)
         @path = path
         @protocol = protocol
+        @mutex = Mutex.new
         FileUtils.mkdir_p(File.dirname(path))
       end
 
       def append(parts)
-        File.open(@path, "a") do |file|
-          file.write(encode(parts))
-          file.flush
+        @mutex.synchronize do
+          File.open(@path, "a") do |file|
+            file.write(encode(parts))
+            file.flush
+          end
         end
       end
 

@@ -14,7 +14,7 @@ module Rediscraft
 
         case command
         when "PING"
-          Response.ok("PONG")
+          Response.simple("PONG")
         when "SET"
           execute_set(parts)
         when "GET"
@@ -42,25 +42,25 @@ module Rediscraft
         return Response.error("ERR wrong number of arguments for SET") unless parts.length == 3
 
         @store.set(parts[1], parts[2])
-        Response.ok("OK")
+        Response.simple("OK")
       end
 
       def execute_get(parts)
         return Response.error("ERR wrong number of arguments for GET") unless parts.length == 2
 
-        Response.ok(@store.get(parts[1]))
+        Response.bulk(@store.get(parts[1]))
       end
 
       def execute_del(parts)
         return Response.error("ERR wrong number of arguments for DEL") unless parts.length == 2
 
-        Response.ok(@store.delete(parts[1]))
+        Response.integer(@store.delete(parts[1]))
       end
 
       def execute_exists(parts)
         return Response.error("ERR wrong number of arguments for EXISTS") unless parts.length == 2
 
-        Response.ok(@store.exist?(parts[1]))
+        Response.integer(@store.exist?(parts[1]))
       end
 
       def execute_expire(parts)
@@ -69,7 +69,7 @@ module Rediscraft
         ttl_seconds = parse_non_negative_integer(parts[2])
         return Response.error("ERR invalid expire time") if ttl_seconds.nil?
 
-        Response.ok(@store.expire(parts[1], ttl_seconds))
+        Response.integer(@store.expire(parts[1], ttl_seconds))
       end
 
       def execute_expire_at(parts)
@@ -78,19 +78,19 @@ module Rediscraft
         epoch_seconds = parse_non_negative_integer(parts[2])
         return Response.error("ERR invalid expire time") if epoch_seconds.nil?
 
-        Response.ok(@store.expire_at(parts[1], Time.at(epoch_seconds).utc))
+        Response.integer(@store.expire_at(parts[1], Time.at(epoch_seconds).utc))
       end
 
       def execute_ttl(parts)
         return Response.error("ERR wrong number of arguments for TTL") unless parts.length == 2
 
-        Response.ok(@store.ttl(parts[1]))
+        Response.integer(@store.ttl(parts[1]))
       end
 
       def execute_persist(parts)
         return Response.error("ERR wrong number of arguments for PERSIST") unless parts.length == 2
 
-        Response.ok(@store.persist(parts[1]))
+        Response.integer(@store.persist(parts[1]))
       end
 
       def parse_non_negative_integer(value)

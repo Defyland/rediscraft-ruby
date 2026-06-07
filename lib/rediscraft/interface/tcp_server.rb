@@ -51,7 +51,7 @@ module Rediscraft
           parts = @protocol.parse(line)
 
           if parts.first&.upcase == "QUIT"
-            socket.write(@protocol.format(Rediscraft::Application::Response.ok("OK")))
+            socket.write(@protocol.format(Rediscraft::Application::Response.simple("OK")))
             break
           end
 

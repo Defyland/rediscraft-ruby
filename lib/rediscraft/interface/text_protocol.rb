@@ -28,6 +28,11 @@ module Rediscraft
         if response.is_a?(Rediscraft::Application::Response)
           return "-#{response.payload}\n" if response.status == :error
 
+          return "$-1\n" if response.kind == :bulk && response.payload.nil?
+          return bulk(response.payload) if response.kind == :bulk
+          return ":#{response.payload}\n" if response.kind == :integer
+          return "+#{response.payload}\n" if response.kind == :simple
+
           format(response.payload)
         elsif response.is_a?(Integer)
           ":#{response}\n"
@@ -41,6 +46,11 @@ module Rediscraft
 
       def simple_string?(value)
         value.match?(/\A[A-Z][A-Z0-9 _-]*\z/)
+      end
+
+      def bulk(value)
+        string = value.to_s
+        "$#{string.bytesize} #{string}\n"
       end
     end
   end

@@ -23,4 +23,10 @@ class TextProtocolTest < Minitest::Test
 
     assert_equal "-ERR unknown command\n", @protocol.format(response)
   end
+
+  def test_formats_bulk_string_even_when_value_looks_like_status
+    response = Rediscraft::Application::Response.bulk("OK")
+
+    assert_equal "$2 OK\n", @protocol.format(response)
+  end
 end
