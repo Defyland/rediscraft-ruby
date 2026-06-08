@@ -1,6 +1,7 @@
 require "test_helper"
 require "rediscraft/application/aof_command_executor"
 require "rediscraft/application/command_executor"
+require "rediscraft/application/command_registry"
 require "rediscraft/domain/store"
 require "rediscraft/infrastructure/aof_log"
 
@@ -51,6 +52,44 @@ class AofCommandExecutorTest < Minitest::Test
 
       assert_equal "Ada", store.get("name")
       assert_equal 60, store.ttl("name")
+    end
+  end
+
+  def test_replays_every_public_durable_command
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "rediscraft.aof")
+      now = Time.utc(2026, 1, 1, 12, 0, 0)
+      registry = Rediscraft::Application::CommandRegistry
+      covered_commands = %w[SET DEL EXPIRE PERSIST]
+      store = Rediscraft::Domain::Store.new(clock: -> { now })
+      inner = Rediscraft::Application::CommandExecutor.new(store: store)
+      aof = Rediscraft::Infrastructure::AofLog.new(path: path)
+      executor = Rediscraft::Application::AofCommandExecutor.new(
+        inner: inner,
+        aof: aof,
+        clock: -> { now }
+      )
+
+      assert_equal covered_commands, registry.public_names.select { |name| registry.durable?(name) }
+
+      executor.execute(["SET", "name", "Ada"])
+      executor.execute(["SET", "stale", "value"])
+      executor.execute(["DEL", "stale"])
+      executor.execute(["SET", "session", "abc"])
+      executor.execute(["EXPIRE", "session", "60"])
+      executor.execute(["SET", "persistent", "value"])
+      executor.execute(["EXPIRE", "persistent", "60"])
+      executor.execute(["PERSIST", "persistent"])
+
+      replayed_store = Rediscraft::Domain::Store.new(clock: -> { now })
+      aof.replay(replayed_store)
+
+      assert_equal "Ada", replayed_store.get("name")
+      assert_nil replayed_store.get("stale")
+      assert_equal "abc", replayed_store.get("session")
+      assert_equal 60, replayed_store.ttl("session")
+      assert_equal "value", replayed_store.get("persistent")
+      assert_equal(-1, replayed_store.ttl("persistent"))
     end
   end
 
