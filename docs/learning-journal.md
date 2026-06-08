@@ -10,10 +10,12 @@ protocolo, TCP, concorrencia, TTL, persistencia append-only e recovery.
 1. Leia `README.md` para entender o produto e limites.
 2. Leia `docs/api/protocol.md` para ver o contrato externo.
 3. Leia `test/unit/command_executor_test.rb` para entender os comandos.
-4. Leia `lib/rediscraft/domain/store.rb` para ver regras de chave e TTL.
-5. Leia `lib/rediscraft/interface/tcp_server.rb` para ver a borda TCP.
-6. Leia `lib/rediscraft/infrastructure/aof_log.rb` para ver replay.
-7. Leia os ADRs em `docs/adr`.
+4. Leia `lib/rediscraft/application/command_registry.rb` para ver o contrato
+   compartilhado de aridade e durabilidade.
+5. Leia `lib/rediscraft/domain/store.rb` para ver regras de chave e TTL.
+6. Leia `lib/rediscraft/interface/tcp_server.rb` para ver a borda TCP.
+7. Leia `lib/rediscraft/infrastructure/aof_log.rb` para ver replay.
+8. Leia os ADRs em `docs/adr`.
 
 ## 3. Historia cronologica da implementacao
 
@@ -46,6 +48,12 @@ Depois que o nucleo ficou estavel, RESP2 foi adicionado como adapter alternativo
 ao protocolo textual. A decisao inicial nao foi apagada: texto por linha
 continua existindo para estudo e comparacao, enquanto RESP2 ensina framing,
 bulk strings e arrays.
+
+Uma nova revisao encontrou duplicacao no contrato de comandos: `CommandExecutor`
+validava nomes e aridades, enquanto `AofCommandExecutor` mantinha outra lista de
+comandos duraveis. A solucao foi criar `CommandRegistry` como fonte pequena e
+unica para nome publico, aridade e durabilidade, sem transformar o executor em um
+framework de despacho.
 
 ## 4. Decisao por decisao
 
@@ -90,12 +98,22 @@ cumprido o papel de primeira borda TCP. A alternativa rejeitada foi substituir o
 protocolo textual, porque isso apagaria uma etapa importante do aprendizado e
 reduziria a comparacao entre os dois modelos.
 
+Contrato central de comandos: escolhido depois que a revisao mostrou risco de
+drift entre execucao e AOF. A alternativa rejeitada foi criar um dispatcher
+generico por comando agora, porque isso adicionaria indirecao sem necessidade no
+escopo atual.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
 
 RESP2 e mais realista e binario-safe para bulk strings, mas exige mais codigo de
 framing e torna a leitura manual menos imediata.
+
+`CommandRegistry` reduz duplicacao entre aplicacao e durabilidade, mas tambem
+vira um ponto que precisa ser atualizado ao adicionar comandos. A escolha foi
+deliberada: explicitar esse ponto e melhor que espalhar aridade e durabilidade
+em dois arquivos.
 
 Mutex unico e facil de ensinar, mas vira gargalo sob escrita pesada.
 
@@ -137,6 +155,12 @@ inicio e copiou a lista de clientes antes de fazer `join`.
 RESP2 entrou apenas depois de o servidor aceitar um contrato comum de protocolo:
 `read_request(io)` e `format(response)`. Essa refatoracao evitou que `TcpServer`
 precisasse conhecer detalhes de parsing de texto ou RESP.
+
+O contrato de comandos ficou duplicado na primeira versao porque o caminho mais
+direto era validar aridade no executor e decidir durabilidade no decorator de
+AOF. A revisao mostrou que isso ficaria fraco assim que novos comandos mutantes
+entrassem. `lib/rediscraft/application/command_registry.rb` foi adicionado para
+manter a simplicidade, mas com uma fonte unica para esse contrato.
 
 ## 7. Como o TDD foi usado
 
@@ -191,9 +215,21 @@ dominio.
 Green: `Resp2Protocol` passou a rejeitar arrays de comando com null bulk antes
 de chamar a aplicacao.
 
+Red: `test/unit/command_registry_test.rb` foi criado antes da implementacao e
+falhou com `LoadError` porque `CommandRegistry` nao existia.
+Green: `CommandRegistry` passou a expor comandos publicos, aridade e traducao
+duravel para AOF; `CommandExecutor` e `AofCommandExecutor` passaram a usar essa
+fonte.
+Refactor: as validacoes repetidas de aridade foram removidas dos metodos
+privados do executor, mantendo ali apenas comportamento de comando.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
+
+`test/unit/command_registry_test.rb` protege o contrato compartilhado entre
+executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
+`EXPIRE` para `EXPIREAT`.
 
 `test/unit/text_protocol_test.rb` protege parsing e tipo de resposta.
 
@@ -229,6 +265,8 @@ mutacao e ignorar frame parcial.
 | `915c7d1` | RESP2 ainda nao estava exposto por TCP/CLI | Integracao RESP real e `--protocol resp2` | `bin/test`, `bin/check` |
 | `ba3ab42` | Null bulk RESP atravessava como `nil` | Adapter rejeita arrays de comando com null bulk | `bin/test`, `bin/check` |
 | `f1e637e` | Docs precisavam registrar RESP sem apagar texto inicial | Journal e docs de protocolo atualizados | `bin/test`, `bin/check` |
+| `49bdc93` | Evidencias de prontidao RESP estavam desalinhadas | Docs registraram o estado real de RESP2 basico | `bin/test`, `bin/check` |
+| `80c1874` | Contrato de comandos duplicava aridade e durabilidade | `CommandRegistry` centraliza nome, aridade e AOF duravel | `ruby -Itest test/unit/command_registry_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -238,6 +276,8 @@ mutacao e ignorar frame parcial.
 - Parsing e formato de resposta entram em `Interface`.
 - Novo protocolo deve implementar `read_request(io)` e `format(response)` sem
   mudar dominio ou aplicacao.
+- Novo comando publico deve entrar em `CommandRegistry` antes de executor,
+  protocolo ou AOF.
 - Teste unitario vem antes de adapter externo.
 
 ## 11. Como adicionar a proxima feature
