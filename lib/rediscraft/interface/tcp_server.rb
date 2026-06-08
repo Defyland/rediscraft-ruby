@@ -16,7 +16,7 @@ module Rediscraft
         @requested_port = port
         @executor = executor
         @protocol = protocol
-        @clients = []
+        @clients = {}
         @clients_mutex = Mutex.new
         @running = false
       end
@@ -43,7 +43,7 @@ module Rediscraft
               @clients_mutex.synchronize { @clients.delete(Thread.current) }
             end
           end
-          @clients_mutex.synchronize { @clients << thread }
+          @clients_mutex.synchronize { @clients[thread] = socket }
           start_gate << true
         end
       ensure
@@ -54,7 +54,8 @@ module Rediscraft
         @running = false
         @server&.close unless @server&.closed?
         clients = @clients_mutex.synchronize { @clients.dup }
-        clients.each { |thread| thread.join(1) }
+        clients.each_value { |socket| close_client_socket(socket) }
+        clients.each_key { |thread| thread.join(1) }
       end
 
       def tracked_client_count
@@ -85,6 +86,20 @@ module Rediscraft
         response = Rediscraft::Application::Response.error("ERR protocol error")
         socket.write(@protocol.format(response))
       rescue IOError, Errno::ECONNRESET, Errno::EPIPE
+        nil
+      end
+
+      def close_client_socket(socket)
+        return if socket.closed?
+
+        begin
+          socket.shutdown(Socket::SHUT_RDWR)
+        rescue IOError, Errno::ENOTCONN, Errno::EBADF
+          nil
+        end
+
+        socket.close unless socket.closed?
+      rescue IOError, Errno::EBADF
         nil
       end
     end

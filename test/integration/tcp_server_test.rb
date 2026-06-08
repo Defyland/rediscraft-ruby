@@ -88,6 +88,19 @@ class TcpServerTest < Minitest::Test
     assert_operator elapsed, :<, 0.2
   end
 
+  def test_stop_closes_idle_client_sockets
+    socket = TCPSocket.new("127.0.0.1", @server.port)
+    wait_until { @server.tracked_client_count == 1 }
+
+    @server.stop
+
+    wait_until { @server.tracked_client_count.zero? }
+    assert IO.select([socket], nil, nil, 1), "client socket should observe server shutdown"
+    assert_nil socket.gets
+  ensure
+    socket&.close
+  end
+
   def test_handles_resp2_commands_over_tcp
     resp_server = build_server(protocol: Rediscraft::Interface::Resp2Protocol.new)
     thread = Thread.new { resp_server.start }
