@@ -65,6 +65,11 @@ menor deixada pelo proprio ajuste: o parsing de inteiro nao negativo para
 `EXPIRE` ainda existia no executor e no registry. A regra foi consolidada em
 `CommandRegistry.parse_non_negative_integer`.
 
+A mesma revisao final revisitou a correcao antiga de null bulk em RESP. Ela
+impedia `nil` de chegar diretamente ao dominio, mas ainda usava `[]` como
+sentinela e chamava a aplicacao. Com `ProtocolError` disponivel, null bulk em
+array de comando passou a ser erro de protocolo no proprio adapter RESP.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -192,6 +197,11 @@ Mesmo depois do `CommandRegistry`, a primeira versao ainda deixou
 regra de parsing para o contrato de comando e fez `CommandExecutor` reutilizar
 essa mesma regra.
 
+A primeira correcao de null bulk escolheu simplicidade demais: retornar `[]`
+fazia o executor responder `ERR unknown command`, mas isso ainda confundia comando
+desconhecido com frame RESP malformado. A correcao final trocou a sentinela por
+`ProtocolError`.
+
 ## 7. Como o TDD foi usado
 
 Red: `test/unit/command_executor_test.rb` falhou por falta de executor.
@@ -265,6 +275,12 @@ inteiro nao negativo e falhou porque o metodo ainda era privado.
 Green: `CommandRegistry.parse_non_negative_integer` virou a unica regra usada
 tanto por AOF duravel quanto por `CommandExecutor#execute_expire`.
 
+Red: `test/unit/resp2_protocol_test.rb` passou a esperar `ProtocolError` para
+null bulk em array de comando, e `test/integration/tcp_server_test.rb` passou a
+esperar `-ERR protocol error\r\n` para esse payload RESP real.
+Green: `Resp2Protocol#normalize_array` passou a levantar `ProtocolError` em vez
+de fabricar `[]`.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
@@ -276,7 +292,7 @@ executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
 `test/unit/text_protocol_test.rb` protege parsing e tipo de resposta.
 
 `test/unit/resp2_protocol_test.rb` protege parser e formatter RESP2, incluindo a
-diferenca entre EOF normal e erro de protocolo.
+diferenca entre EOF normal, null bulk invalido em comando e erro de protocolo.
 
 `test/integration/tcp_server_test.rb` protege conexao TCP real e clientes
 concorrentes, incluindo comando RESP2 real e erro RESP malformado visivel ao
@@ -315,6 +331,8 @@ mutacao e ignorar frame parcial.
 | `c587e7e` | Erro RESP era indistinguivel de EOF | `ProtocolError` visivel e `ERR protocol error` via TCP | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
 | `14ea1da` | Docs precisavam refletir erro RESP visivel | Protocolo, erros e journal documentaram `ERR protocol error` | `bin/test`, `bin/check` |
 | `6fd48b5` | Parsing de TTL ainda estava duplicado | Executor reutiliza parsing central do `CommandRegistry` | `ruby -Itest test/unit/command_registry_test.rb`, `bin/test`, `bin/check` |
+| `844d5b5` | Journal precisava preservar a limpeza de parsing | Registro cronologico do ajuste encontrado pela revisao | `bin/test`, `bin/check` |
+| `a6646e3` | Null bulk RESP ainda passava pela aplicacao como `[]` | Adapter RESP trata null bulk em comando como `ProtocolError` | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
