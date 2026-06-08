@@ -60,6 +60,11 @@ tratava erro de framing igual a EOF. Agora EOF ainda fecha silenciosamente, mas
 erro RESP vira `ERR protocol error` formatado pelo adapter antes de fechar a
 conexao daquele cliente.
 
+A revisao Ruby/termonuclear depois dessas duas correcoes encontrou uma duplicacao
+menor deixada pelo proprio ajuste: o parsing de inteiro nao negativo para
+`EXPIRE` ainda existia no executor e no registry. A regra foi consolidada em
+`CommandRegistry.parse_non_negative_integer`.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -182,6 +187,11 @@ correcao criou `lib/rediscraft/interface/protocol_error.rb`, fez
 `Resp2Protocol` propagar o erro e deixou `TcpServer` formatar a resposta de erro
 pela interface atual.
 
+Mesmo depois do `CommandRegistry`, a primeira versao ainda deixou
+`parse_non_negative_integer` duplicado no executor. A correcao posterior moveu a
+regra de parsing para o contrato de comando e fez `CommandExecutor` reutilizar
+essa mesma regra.
+
 ## 7. Como o TDD foi usado
 
 Red: `test/unit/command_executor_test.rb` falhou por falta de executor.
@@ -250,13 +260,18 @@ Green: `Resp2Protocol` parou de engolir erro de parser, `TcpServer` passou a
 resgatar `ProtocolError` e escrever a resposta pelo adapter antes de fechar o
 socket.
 
+Red: `test/unit/command_registry_test.rb` passou a esperar parsing publico de
+inteiro nao negativo e falhou porque o metodo ainda era privado.
+Green: `CommandRegistry.parse_non_negative_integer` virou a unica regra usada
+tanto por AOF duravel quanto por `CommandExecutor#execute_expire`.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
 
 `test/unit/command_registry_test.rb` protege o contrato compartilhado entre
 executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
-`EXPIRE` para `EXPIREAT`.
+`EXPIRE` para `EXPIREAT`, alem do parsing de inteiro nao negativo.
 
 `test/unit/text_protocol_test.rb` protege parsing e tipo de resposta.
 
@@ -298,6 +313,8 @@ mutacao e ignorar frame parcial.
 | `80c1874` | Contrato de comandos duplicava aridade e durabilidade | `CommandRegistry` centraliza nome, aridade e AOF duravel | `ruby -Itest test/unit/command_registry_test.rb`, `bin/test`, `bin/check` |
 | `4783bc0` | Journal precisava registrar a evolucao do contrato central | Registro cronologico do `CommandRegistry` e do TDD usado | `bin/test`, `bin/check` |
 | `c587e7e` | Erro RESP era indistinguivel de EOF | `ProtocolError` visivel e `ERR protocol error` via TCP | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
+| `14ea1da` | Docs precisavam refletir erro RESP visivel | Protocolo, erros e journal documentaram `ERR protocol error` | `bin/test`, `bin/check` |
+| `6fd48b5` | Parsing de TTL ainda estava duplicado | Executor reutiliza parsing central do `CommandRegistry` | `ruby -Itest test/unit/command_registry_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
