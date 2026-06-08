@@ -68,16 +68,24 @@ module Rediscraft
         count_text, cursor = read_token(source, 1)
         count = Integer(count_text, 10)
 
-        count.times.map do
+        parts = count.times.map do |index|
           length_text, cursor = read_token(source, cursor)
           length = Integer(length_text, 10)
           value = source.byteslice(cursor, length)
           return nil if value.nil? || value.bytesize != length
 
           cursor += length
-          cursor += 1 if source.byteslice(cursor, 1) == " "
+          if index < count - 1
+            return nil unless source.byteslice(cursor, 1) == " "
+
+            cursor += 1
+          end
           value
         end
+
+        return nil unless cursor == source.bytesize
+
+        parts
       rescue ArgumentError
         nil
       end
