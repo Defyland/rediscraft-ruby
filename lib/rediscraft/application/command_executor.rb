@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "rediscraft/application/response"
+require "rediscraft/application/command_registry"
 
 module Rediscraft
   module Application
@@ -10,7 +11,10 @@ module Rediscraft
       end
 
       def execute(parts)
-        command = parts.first&.upcase
+        command = CommandRegistry.normalize(parts.first)
+        spec = CommandRegistry.fetch(command)
+        return Response.error("ERR unknown command") if spec.nil?
+        return Response.error("ERR wrong number of arguments for #{command}") unless spec.valid_arity?(parts)
 
         case command
         when "PING"
@@ -37,33 +41,23 @@ module Rediscraft
       private
 
       def execute_set(parts)
-        return Response.error("ERR wrong number of arguments for SET") unless parts.length == 3
-
         @store.set(parts[1], parts[2])
         Response.simple("OK")
       end
 
       def execute_get(parts)
-        return Response.error("ERR wrong number of arguments for GET") unless parts.length == 2
-
         Response.bulk(@store.get(parts[1]))
       end
 
       def execute_del(parts)
-        return Response.error("ERR wrong number of arguments for DEL") unless parts.length == 2
-
         Response.integer(@store.delete(parts[1]))
       end
 
       def execute_exists(parts)
-        return Response.error("ERR wrong number of arguments for EXISTS") unless parts.length == 2
-
         Response.integer(@store.exist?(parts[1]))
       end
 
       def execute_expire(parts)
-        return Response.error("ERR wrong number of arguments for EXPIRE") unless parts.length == 3
-
         ttl_seconds = parse_non_negative_integer(parts[2])
         return Response.error("ERR invalid expire time") if ttl_seconds.nil?
 
@@ -71,14 +65,10 @@ module Rediscraft
       end
 
       def execute_ttl(parts)
-        return Response.error("ERR wrong number of arguments for TTL") unless parts.length == 2
-
         Response.integer(@store.ttl(parts[1]))
       end
 
       def execute_persist(parts)
-        return Response.error("ERR wrong number of arguments for PERSIST") unless parts.length == 2
-
         Response.integer(@store.persist(parts[1]))
       end
 
