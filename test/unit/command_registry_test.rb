@@ -23,4 +23,12 @@ class CommandRegistryTest < Minitest::Test
     assert_nil registry.durable_parts_for(["EXPIRE", "session", "-1"], clock: -> { now })
     assert_nil registry.durable_parts_for(["SET", "name"], clock: -> { now })
   end
+
+  def test_parses_non_negative_integer_arguments
+    registry = Rediscraft::Application::CommandRegistry
+
+    assert_equal 60, registry.parse_non_negative_integer("60")
+    assert_nil registry.parse_non_negative_integer("-1")
+    assert_nil registry.parse_non_negative_integer("abc")
+  end
 end

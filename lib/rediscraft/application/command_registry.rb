@@ -62,7 +62,6 @@ module Rediscraft
       rescue ArgumentError
         nil
       end
-      private_class_method :parse_non_negative_integer
     end
   end
 end

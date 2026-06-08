@@ -58,7 +58,7 @@ module Rediscraft
       end
 
       def execute_expire(parts)
-        ttl_seconds = parse_non_negative_integer(parts[2])
+        ttl_seconds = CommandRegistry.parse_non_negative_integer(parts[2])
         return Response.error("ERR invalid expire time") if ttl_seconds.nil?
 
         Response.integer(@store.expire(parts[1], ttl_seconds))
@@ -70,12 +70,6 @@ module Rediscraft
 
       def execute_persist(parts)
         Response.integer(@store.persist(parts[1]))
-      end
-
-      def parse_non_negative_integer(value)
-        Integer(value, 10).then { |number| number.negative? ? nil : number }
-      rescue ArgumentError
-        nil
       end
     end
   end
