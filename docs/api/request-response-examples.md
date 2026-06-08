@@ -19,3 +19,10 @@
 > TTL name
 < :10
 ```
+
+RESP2 malformed frame:
+
+```text
+> ?\r\n
+< -ERR protocol error\r\n
+```

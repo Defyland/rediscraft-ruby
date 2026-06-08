@@ -55,6 +55,8 @@ Supported RESP2 input types:
 The TCP command path expects an array command for normal Redis-like use.
 Null bulk strings inside command arrays are rejected by the adapter because
 `nil` is reserved in the application response model to mean missing value.
+Malformed RESP2 frames return `-ERR protocol error\r\n` and close that client
+connection. EOF still closes the connection silently.
 
 ## RESP2 Response
 
@@ -65,4 +67,5 @@ Null bulk strings inside command arrays are rejected by the adapter because
 $3\r\nAda\r\n
 $-1\r\n
 -ERR unknown command\r\n
+-ERR protocol error\r\n
 ```

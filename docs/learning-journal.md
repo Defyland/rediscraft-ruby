@@ -55,6 +55,11 @@ comandos duraveis. A solucao foi criar `CommandRegistry` como fonte pequena e
 unica para nome publico, aridade e durabilidade, sem transformar o executor em um
 framework de despacho.
 
+Na fatia seguinte, outro ponto da revisao foi corrigido: `Resp2Protocol`
+tratava erro de framing igual a EOF. Agora EOF ainda fecha silenciosamente, mas
+erro RESP vira `ERR protocol error` formatado pelo adapter antes de fechar a
+conexao daquele cliente.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -103,6 +108,11 @@ drift entre execucao e AOF. A alternativa rejeitada foi criar um dispatcher
 generico por comando agora, porque isso adicionaria indirecao sem necessidade no
 escopo atual.
 
+Erro RESP explicito: escolhido porque um cliente precisa distinguir "servidor
+fechou porque acabou o stream" de "payload malformado". A alternativa rejeitada
+foi manter `nil` como fallback para tudo, porque isso escondia bugs de protocolo
+e tornava troubleshooting pior.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
@@ -114,6 +124,10 @@ framing e torna a leitura manual menos imediata.
 vira um ponto que precisa ser atualizado ao adicionar comandos. A escolha foi
 deliberada: explicitar esse ponto e melhor que espalhar aridade e durabilidade
 em dois arquivos.
+
+Responder `ERR protocol error` ajuda clientes e testes de integracao, mas a
+conexao e fechada depois do erro. Isso simplifica a recuperacao porque, depois
+de um frame RESP invalido, a posicao segura do stream nao e garantida.
 
 Mutex unico e facil de ensinar, mas vira gargalo sob escrita pesada.
 
@@ -161,6 +175,12 @@ direto era validar aridade no executor e decidir durabilidade no decorator de
 AOF. A revisao mostrou que isso ficaria fraco assim que novos comandos mutantes
 entrassem. `lib/rediscraft/application/command_registry.rb` foi adicionado para
 manter a simplicidade, mas com uma fonte unica para esse contrato.
+
+O parser RESP inicialmente resgatava `ProtocolError` e retornava `nil`. Essa era
+uma decisao fraca porque misturava erro de protocolo com desconexao normal. A
+correcao criou `lib/rediscraft/interface/protocol_error.rb`, fez
+`Resp2Protocol` propagar o erro e deixou `TcpServer` formatar a resposta de erro
+pela interface atual.
 
 ## 7. Como o TDD foi usado
 
@@ -223,6 +243,13 @@ fonte.
 Refactor: as validacoes repetidas de aridade foram removidas dos metodos
 privados do executor, mantendo ali apenas comportamento de comando.
 
+Red: `test/unit/resp2_protocol_test.rb` passou a esperar
+`Rediscraft::Interface::ProtocolError` para bulk incompleto e a integracao TCP
+passou a esperar `-ERR protocol error\r\n` para prefixo RESP invalido.
+Green: `Resp2Protocol` parou de engolir erro de parser, `TcpServer` passou a
+resgatar `ProtocolError` e escrever a resposta pelo adapter antes de fechar o
+socket.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
@@ -233,10 +260,12 @@ executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
 
 `test/unit/text_protocol_test.rb` protege parsing e tipo de resposta.
 
-`test/unit/resp2_protocol_test.rb` protege parser e formatter RESP2.
+`test/unit/resp2_protocol_test.rb` protege parser e formatter RESP2, incluindo a
+diferenca entre EOF normal e erro de protocolo.
 
 `test/integration/tcp_server_test.rb` protege conexao TCP real e clientes
-concorrentes, incluindo comando RESP2 real.
+concorrentes, incluindo comando RESP2 real e erro RESP malformado visivel ao
+cliente.
 
 `test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
 mutacao e ignorar frame parcial.
@@ -267,6 +296,8 @@ mutacao e ignorar frame parcial.
 | `f1e637e` | Docs precisavam registrar RESP sem apagar texto inicial | Journal e docs de protocolo atualizados | `bin/test`, `bin/check` |
 | `49bdc93` | Evidencias de prontidao RESP estavam desalinhadas | Docs registraram o estado real de RESP2 basico | `bin/test`, `bin/check` |
 | `80c1874` | Contrato de comandos duplicava aridade e durabilidade | `CommandRegistry` centraliza nome, aridade e AOF duravel | `ruby -Itest test/unit/command_registry_test.rb`, `bin/test`, `bin/check` |
+| `4783bc0` | Journal precisava registrar a evolucao do contrato central | Registro cronologico do `CommandRegistry` e do TDD usado | `bin/test`, `bin/check` |
+| `c587e7e` | Erro RESP era indistinguivel de EOF | `ProtocolError` visivel e `ERR protocol error` via TCP | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -278,6 +309,7 @@ mutacao e ignorar frame parcial.
   mudar dominio ou aplicacao.
 - Novo comando publico deve entrar em `CommandRegistry` antes de executor,
   protocolo ou AOF.
+- Novo parser de protocolo deve diferenciar EOF normal de erro de framing.
 - Teste unitario vem antes de adapter externo.
 
 ## 11. Como adicionar a proxima feature
@@ -288,7 +320,7 @@ pelo protocolo e registre no journal qual custo de observabilidade foi aceito.
 
 ## 12. Limites de producao deixados fora
 
-Sem auth, TLS, ACL, RESP, snapshots, AOF compaction, fsync configuravel,
+Sem auth, TLS, ACL, RESP completo, snapshots, AOF compaction, fsync configuravel,
 replicacao, clustering, limite de conexoes, metricas e backpressure.
 
 ## 13. Resultado das revisoes de qualidade
