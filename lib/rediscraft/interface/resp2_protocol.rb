@@ -62,7 +62,7 @@ module Rediscraft
       end
 
       def normalize_array(value)
-        return [] if value.any?(&:nil?)
+        raise ProtocolError, "null command argument" if value.any?(&:nil?)
 
         value.map(&:to_s)
       end

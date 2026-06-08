@@ -31,7 +31,9 @@ class Resp2ProtocolTest < Minitest::Test
   end
 
   def test_rejects_array_command_with_null_bulk
-    assert_equal [], @protocol.read_request(StringIO.new("*3\r\n$3\r\nSET\r\n$4\r\nname\r\n$-1\r\n"))
+    assert_raises(Rediscraft::Interface::ProtocolError) do
+      @protocol.read_request(StringIO.new("*3\r\n$3\r\nSET\r\n$4\r\nname\r\n$-1\r\n"))
+    end
   end
 
   def test_returns_nil_on_eof

@@ -119,7 +119,7 @@ class TcpServerTest < Minitest::Test
     sleep 0.05 until resp_server.port
     socket = TCPSocket.new("127.0.0.1", resp_server.port)
 
-    socket.write("?\r\n")
+    socket.write("*3\r\n$3\r\nSET\r\n$4\r\nname\r\n$-1\r\n")
 
     assert_equal "-ERR protocol error\r\n", socket.gets
   ensure
