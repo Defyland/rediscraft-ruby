@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "rediscraft/application/response"
+require "rediscraft/interface/protocol_error"
 
 module Rediscraft
   module Interface
@@ -14,8 +15,6 @@ module Rediscraft
         return normalize_array(value) if value.is_a?(Array)
 
         [value.to_s]
-      rescue ProtocolError
-        nil
       end
 
       def format(response)
@@ -31,8 +30,6 @@ module Rediscraft
       end
 
       private
-
-      class ProtocolError < StandardError; end
 
       def read_value(io)
         prefix = io.read(1)

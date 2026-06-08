@@ -2,6 +2,8 @@
 
 require "socket"
 require "thread"
+require "rediscraft/application/response"
+require "rediscraft/interface/protocol_error"
 require "rediscraft/interface/text_protocol"
 
 module Rediscraft
@@ -71,10 +73,19 @@ module Rediscraft
 
           socket.write(@protocol.format(@executor.execute(parts)))
         end
+      rescue ProtocolError
+        write_protocol_error(socket)
       rescue IOError, Errno::ECONNRESET
         nil
       ensure
         socket.close unless socket.closed?
+      end
+
+      def write_protocol_error(socket)
+        response = Rediscraft::Application::Response.error("ERR protocol error")
+        socket.write(@protocol.format(response))
+      rescue IOError, Errno::ECONNRESET, Errno::EPIPE
+        nil
       end
     end
   end

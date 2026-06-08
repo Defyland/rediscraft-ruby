@@ -34,6 +34,10 @@ class Resp2ProtocolTest < Minitest::Test
     assert_equal [], @protocol.read_request(StringIO.new("*3\r\n$3\r\nSET\r\n$4\r\nname\r\n$-1\r\n"))
   end
 
+  def test_returns_nil_on_eof
+    assert_nil @protocol.read_request(StringIO.new(""))
+  end
+
   def test_formats_application_responses
     assert_equal "+PONG\r\n", @protocol.format(Rediscraft::Application::Response.simple("PONG"))
     assert_equal "$3\r\nAda\r\n", @protocol.format(Rediscraft::Application::Response.bulk("Ada"))
@@ -42,7 +46,9 @@ class Resp2ProtocolTest < Minitest::Test
     assert_equal "-ERR unknown command\r\n", @protocol.format(Rediscraft::Application::Response.error("ERR unknown command"))
   end
 
-  def test_rejects_incomplete_bulk_string
-    assert_nil @protocol.read_request(StringIO.new("$5\r\nabc"))
+  def test_raises_protocol_error_for_incomplete_bulk_string
+    assert_raises(Rediscraft::Interface::ProtocolError) do
+      @protocol.read_request(StringIO.new("$5\r\nabc"))
+    end
   end
 end

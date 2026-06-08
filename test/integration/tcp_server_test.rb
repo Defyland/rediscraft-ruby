@@ -113,6 +113,21 @@ class TcpServerTest < Minitest::Test
     thread&.join(1)
   end
 
+  def test_reports_resp2_protocol_errors_over_tcp
+    resp_server = build_server(protocol: Rediscraft::Interface::Resp2Protocol.new)
+    thread = Thread.new { resp_server.start }
+    sleep 0.05 until resp_server.port
+    socket = TCPSocket.new("127.0.0.1", resp_server.port)
+
+    socket.write("?\r\n")
+
+    assert_equal "-ERR protocol error\r\n", socket.gets
+  ensure
+    socket&.close
+    resp_server&.stop
+    thread&.join(1)
+  end
+
   private
 
   def build_server(protocol:)
