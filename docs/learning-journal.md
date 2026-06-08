@@ -333,6 +333,7 @@ mutacao e ignorar frame parcial.
 | `6fd48b5` | Parsing de TTL ainda estava duplicado | Executor reutiliza parsing central do `CommandRegistry` | `ruby -Itest test/unit/command_registry_test.rb`, `bin/test`, `bin/check` |
 | `844d5b5` | Journal precisava preservar a limpeza de parsing | Registro cronologico do ajuste encontrado pela revisao | `bin/test`, `bin/check` |
 | `a6646e3` | Null bulk RESP ainda passava pela aplicacao como `[]` | Adapter RESP trata null bulk em comando como `ProtocolError` | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
+| `d04dbb1` | Journal precisava registrar a melhoria de null bulk | Docs preservaram a sentinela antiga e a correcao final | `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -381,6 +382,17 @@ snapshot da lista antes de `join`.
 Revisao Ruby/termonuclear apos RESP encontrou uma melhoria de boundary: null
 bulk de RESP nao deveria virar `nil` dentro da aplicacao, porque `nil` ja
 representa valor ausente em `GET`. Foi corrigido no adapter RESP.
+
+Rodada atual de revisao Ruby/termonuclear encontrou quatro ajustes no escopo:
+contrato de comandos duplicado entre executor e AOF, erro RESP confundido com
+EOF, parsing de inteiro nao negativo duplicado e null bulk ainda representado por
+`[]` antes de chamar a aplicacao. Todos foram corrigidos em commits atomicos.
+
+Passada final depois das correcoes: sem achados bloqueantes ou nao bloqueantes
+relevantes para o escopo atual. Evidencia: `bin/test` e `bin/check` verdes com
+34 testes e 80 assertions. Riscos residuais continuam intencionais: sem auth,
+TLS, limite de conexoes, backpressure, `fsync` configuravel, snapshots,
+replicacao ou benchmarks de contencao.
 
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
