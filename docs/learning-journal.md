@@ -70,6 +70,13 @@ impedia `nil` de chegar diretamente ao dominio, mas ainda usava `[]` como
 sentinela e chamava a aplicacao. Com `ProtocolError` disponivel, null bulk em
 array de comando passou a ser erro de protocolo no proprio adapter RESP.
 
+Uma revisao posterior focada em lifecycle e recovery encontrou tres pontos:
+`TcpServer#stop` fechava o listener, mas nao os sockets de clientes ociosos; o
+decoder AOF aceitava bytes extras dentro de um frame; e o contrato entre comandos
+duraveis emitidos e replay precisava de um teste de cobertura explicito. As
+correcoes mantiveram o desenho pequeno: tracking de thread para socket no TCP,
+decoder AOF estrito e teste de contrato sem criar um aplicador novo.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -123,6 +130,15 @@ fechou porque acabou o stream" de "payload malformado". A alternativa rejeitada
 foi manter `nil` como fallback para tudo, porque isso escondia bugs de protocolo
 e tornava troubleshooting pior.
 
+Fechar sockets ativos em `stop`: escolhido porque o servidor ja rastreava
+clientes e precisava completar o lifecycle que iniciou. A alternativa rejeitada
+foi deixar clientes ociosos dependerem de timeout externo, porque isso mantinha
+threads bloqueadas em leitura.
+
+Frame AOF estrito: escolhido porque recovery nao deve aplicar um comando quando
+o payload tem bytes sobrando. A alternativa rejeitada foi tolerar lixo no fim do
+frame, porque isso escondia corrupcao parcial.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
@@ -146,6 +162,14 @@ preserva bytes de argumentos melhor que `join/split`, mas e menos legivel e
 ainda cresce sem limite.
 
 Thread por cliente e direto, mas nao modela multiplexacao eficiente.
+
+Rastrear socket junto da thread deixa shutdown mais correto, mas aumenta o estado
+mantido pelo servidor. A simplicidade ainda e aceitavel porque o estado tem dono
+unico: `TcpServer`.
+
+Decoder AOF estrito reduz tolerancia a corrupcao silenciosa, mas fixtures manuais
+precisam ter tamanho correto. Isso e desejavel para ensinar recovery com framing
+real.
 
 ## 6. Erros, decisoes fracas ou correcoes
 
@@ -201,6 +225,18 @@ A primeira correcao de null bulk escolheu simplicidade demais: retornar `[]`
 fazia o executor responder `ERR unknown command`, mas isso ainda confundia comando
 desconhecido com frame RESP malformado. A correcao final trocou a sentinela por
 `ProtocolError`.
+
+`TcpServer#stop` ainda deixava clientes ociosos bloqueados porque fechava apenas
+o socket listener. A correcao passou a guardar `thread => socket`, fechar os
+sockets ativos e so depois aguardar os workers.
+
+O decoder AOF aceitava um frame cujo payload tinha um comando valido seguido de
+bytes extras. Isso foi corrigido exigindo separadores entre argumentos e consumo
+exato do payload.
+
+O contrato entre comandos duraveis e replay estava correto para os comandos
+atuais, mas dependia de leitura humana. Foi adicionado um teste que falha quando
+um comando entra como duravel no registry sem cobertura de replay.
 
 ## 7. Como o TDD foi usado
 
@@ -281,6 +317,21 @@ esperar `-ERR protocol error\r\n` para esse payload RESP real.
 Green: `Resp2Protocol#normalize_array` passou a levantar `ProtocolError` em vez
 de fabricar `[]`.
 
+Red: `test/integration/tcp_server_test.rb` adicionou um cliente ocioso e mostrou
+que `stop` nao zerava o tracking.
+Green: `TcpServer` passou a rastrear sockets ativos junto das threads, fechar
+esses sockets em `stop` e so entao fazer `join`.
+
+Red: `test/unit/aof_command_executor_test.rb` criou um frame AOF com bytes extras
+apos um comando `SET` valido e mostrou que replay ainda aplicava o valor.
+Green: `AofLog#decode` passou a exigir que o cursor consuma exatamente o payload
+do frame.
+
+Coverage: `test/unit/aof_command_executor_test.rb` passou a exercitar todos os
+comandos que `CommandRegistry` marca como duraveis contra replay real. Esse teste
+nao nasceu vermelho para o estado atual; ele existe para impedir drift na proxima
+feature mutante.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade e TTL.
@@ -296,10 +347,11 @@ diferenca entre EOF normal, null bulk invalido em comando e erro de protocolo.
 
 `test/integration/tcp_server_test.rb` protege conexao TCP real e clientes
 concorrentes, incluindo comando RESP2 real e erro RESP malformado visivel ao
-cliente.
+cliente. Tambem protege shutdown de clientes ociosos.
 
 `test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
-mutacao e ignorar frame parcial.
+mutacao, ignorar frame parcial, rejeitar frame com bytes extras e manter contrato
+entre comandos duraveis e replay.
 
 ## 9. Timeline dos commits atomicos
 
@@ -334,6 +386,9 @@ mutacao e ignorar frame parcial.
 | `844d5b5` | Journal precisava preservar a limpeza de parsing | Registro cronologico do ajuste encontrado pela revisao | `bin/test`, `bin/check` |
 | `a6646e3` | Null bulk RESP ainda passava pela aplicacao como `[]` | Adapter RESP trata null bulk em comando como `ProtocolError` | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
 | `d04dbb1` | Journal precisava registrar a melhoria de null bulk | Docs preservaram a sentinela antiga e a correcao final | `bin/test`, `bin/check` |
+| `05a9349` | `stop` nao encerrava clientes ociosos | TCP passa a rastrear e fechar sockets ativos | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
+| `7b3dc30` | AOF aceitava bytes extras no frame | Decoder exige consumo exato do payload | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `9fd849f` | Contrato duravel/replay dependia de revisao manual | Teste cobre todos os comandos duraveis publicos contra replay | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -346,6 +401,9 @@ mutacao e ignorar frame parcial.
 - Novo comando publico deve entrar em `CommandRegistry` antes de executor,
   protocolo ou AOF.
 - Novo parser de protocolo deve diferenciar EOF normal de erro de framing.
+- Novo comando duravel deve atualizar o teste de contrato entre registry, AOF e
+  replay.
+- Shutdown de interface externa deve liberar sockets e threads que ela abriu.
 - Teste unitario vem antes de adapter externo.
 
 ## 11. Como adicionar a proxima feature
@@ -388,11 +446,16 @@ contrato de comandos duplicado entre executor e AOF, erro RESP confundido com
 EOF, parsing de inteiro nao negativo duplicado e null bulk ainda representado por
 `[]` antes de chamar a aplicacao. Todos foram corrigidos em commits atomicos.
 
-Passada final depois das correcoes: sem achados bloqueantes ou nao bloqueantes
-relevantes para o escopo atual. Evidencia: `bin/test` e `bin/check` verdes com
-34 testes e 80 assertions. Riscos residuais continuam intencionais: sem auth,
-TLS, limite de conexoes, backpressure, `fsync` configuravel, snapshots,
+Passada final depois das correcoes anteriores: sem achados bloqueantes ou nao
+bloqueantes relevantes para aquele escopo. Evidencia: `bin/test` e `bin/check`
+verdes com 34 testes e 80 assertions. Riscos residuais continuavam intencionais:
+sem auth, TLS, limite de conexoes, backpressure, `fsync` configuravel, snapshots,
 replicacao ou benchmarks de contencao.
+
+Nova revisao Ruby/termonuclear encontrou tres ajustes: shutdown TCP nao fechava
+clientes ociosos, decoder AOF aceitava bytes extras no frame e faltava teste de
+contrato entre comandos duraveis e replay. Todos foram corrigidos. Evidencia:
+`bin/test` e `bin/check` verdes com 37 testes e 90 assertions.
 
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
