@@ -31,8 +31,10 @@ module Rediscraft
 
       def delete(key)
         @mutex.synchronize do
-          live_entry_for(key)
-          @entries.delete(key).nil? ? 0 : 1
+          return 0 if live_entry_for(key).nil?
+
+          @entries.delete(key)
+          1
         end
       end
 

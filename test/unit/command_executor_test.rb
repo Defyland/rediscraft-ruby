@@ -28,6 +28,15 @@ class CommandExecutorTest < Minitest::Test
     assert_nil @executor.execute(["GET", "name"]).payload
   end
 
+  def test_del_on_expired_key_reports_zero
+    @executor.execute(["SET", "session", "abc"])
+    @executor.execute(["EXPIRE", "session", "10"])
+
+    @now += 11
+
+    assert_equal 0, @executor.execute(["DEL", "session"]).payload
+  end
+
   def test_exists_reports_presence_as_integer
     @executor.execute(["SET", "name", "Ada"])
 
