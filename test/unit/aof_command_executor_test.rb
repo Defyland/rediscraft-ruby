@@ -6,6 +6,25 @@ require "rediscraft/domain/store"
 require "rediscraft/infrastructure/aof_log"
 
 class AofCommandExecutorTest < Minitest::Test
+  def build_recording_file
+    recorded = { written: +"", flushes: 0, fsyncs: 0 }
+    file = Object.new
+    file.define_singleton_method(:write) { |chunk| recorded[:written] << chunk }
+    file.define_singleton_method(:flush) { recorded[:flushes] += 1 }
+    file.define_singleton_method(:fsync) { recorded[:fsyncs] += 1 }
+    [file, recorded]
+  end
+
+  # Hand-rolled stub: the project intentionally has no mocking gem, so we swap
+  # File.open for the block and restore it afterwards.
+  def with_file_open_returning(file)
+    original = File.singleton_class.instance_method(:open)
+    File.singleton_class.define_method(:open) { |*_args, &block| block.call(file) }
+    yield
+  ensure
+    File.singleton_class.define_method(:open, original)
+  end
+
   def test_records_valid_durable_commands_before_applying_them
     Dir.mktmpdir do |dir|
       path = File.join(dir, "rediscraft.aof")
@@ -194,5 +213,36 @@ class AofCommandExecutorTest < Minitest::Test
 
     assert_equal store.get("key"), appended.last[2],
       "durable record order must match the order mutations reached the store"
+  end
+
+  def test_flushes_without_fsync_by_default
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "rediscraft.aof")
+      aof = Rediscraft::Infrastructure::AofLog.new(path: path)
+      file, recorded = build_recording_file
+
+      with_file_open_returning(file) do
+        aof.append(["SET", "name", "Ada"])
+      end
+
+      assert_includes recorded[:written], "SET"
+      assert_equal 1, recorded[:flushes]
+      assert_equal 0, recorded[:fsyncs]
+    end
+  end
+
+  def test_fsyncs_after_append_when_enabled
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "rediscraft.aof")
+      aof = Rediscraft::Infrastructure::AofLog.new(path: path, fsync: true)
+      file, recorded = build_recording_file
+
+      with_file_open_returning(file) do
+        aof.append(["SET", "name", "Ada"])
+      end
+
+      assert_equal 1, recorded[:flushes]
+      assert_equal 1, recorded[:fsyncs]
+    end
   end
 end

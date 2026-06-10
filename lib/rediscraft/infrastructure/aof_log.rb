@@ -4,8 +4,9 @@ require "fileutils"
 module Rediscraft
   module Infrastructure
     class AofLog
-      def initialize(path:)
+      def initialize(path:, fsync: false)
         @path = path
+        @fsync = fsync
         @mutex = Mutex.new
         FileUtils.mkdir_p(File.dirname(path))
       end
@@ -15,6 +16,7 @@ module Rediscraft
           File.open(@path, "ab") do |file|
             file.write(encode(parts))
             file.flush
+            file.fsync if @fsync
           end
         end
       end
