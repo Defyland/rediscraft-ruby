@@ -62,7 +62,7 @@ class TcpServerTest < Minitest::Test
     end
   end
 
-  def test_removes_finished_client_threads_from_tracking
+  def test_removes_closed_connections_from_tracking
     socket = TCPSocket.new("127.0.0.1", @server.port)
     socket.write("QUIT\n")
     assert_equal "+OK\n", socket.gets
@@ -73,7 +73,21 @@ class TcpServerTest < Minitest::Test
     assert_equal 0, @server.tracked_client_count
   end
 
-  def test_stop_does_not_join_clients_while_holding_tracking_lock
+  def test_handles_a_command_split_across_writes
+    socket = TCPSocket.new("127.0.0.1", @server.port)
+
+    socket.write("SET split ")
+    sleep 0.05
+    socket.write("value\n")
+    assert_equal "+OK\n", socket.gets
+
+    socket.write("GET split\n")
+    assert_equal "$5 value\n", socket.gets
+  ensure
+    socket&.close
+  end
+
+  def test_stop_returns_without_blocking
     socket = TCPSocket.new("127.0.0.1", @server.port)
     socket.write("QUIT\n")
     assert_equal "+OK\n", socket.gets
