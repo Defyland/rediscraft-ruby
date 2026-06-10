@@ -5,7 +5,55 @@
 Criar um Redis-like do zero em Ruby para estudar backend em profundidade:
 protocolo, TCP, concorrencia, TTL, persistencia append-only e recovery.
 
-## 2. Como ler o repositorio primeiro
+## 2. Os conceitos que este projeto ensina (leia primeiro)
+
+Este journal nasceu cronologico: rodada apos rodada de "primeiro fiz assim, depois
+a revisao mostrou que...". Isso e bom para ver o desenho evoluir, mas ruim para uma
+primeira leitura. Esta secao e o atalho: os conceitos centrais de backend que o
+projeto materializa, cada um com onde aprende-lo a fundo. Leia isto, depois siga a
+ordem de leitura no fim da secao.
+
+1. **Framing de protocolo.** TCP e um stream de bytes sem fronteiras de mensagem.
+   Quem fala o protocolo precisa decidir onde um comando termina: por linha (texto)
+   ou por tamanho prefixado (RESP). Num event loop os bytes chegam em pedacos, entao
+   o parser tem de ser incremental: consumir o que ha e dizer "incompleto" sem
+   bloquear. Veja secoes 14 e 16; `lib/rediscraft/interface/*_protocol.rb`.
+
+2. **Durabilidade e a escada do fsync.** Persistir mutacoes como um log (write-ahead)
+   permite reconstruir o estado. Mas "escrevi no arquivo" tem niveis: buffer da
+   linguagem, page cache do SO, disco (`fsync`), e a entrada de diretorio
+   (`fsync` do diretorio). Cada nivel protege contra uma falha diferente. Veja
+   secoes 15 e 18; `lib/rediscraft/infrastructure/aof_log.rb`.
+
+3. **Modelos de concorrencia, e a GVL.** O projeto comecou com uma thread por
+   cliente e migrou para um event loop single-threaded, o modelo do Redis. Entender
+   por que e quando isso ajuda exige entender o que a GVL do Ruby garante e o que
+   nao garante. Veja secoes 16 e 17.
+
+4. **Complexidade num servidor single-threaded.** Quando uma thread serve todos, um
+   comando O(N) congela todos os clientes pela duracao. Saber a complexidade de cada
+   comando deixa de ser academico e vira requisito. O `INFO` ensinou isso na pratica.
+   Veja secao 18; o benchmark em `benchmarks/`.
+
+5. **Expiracao: preguicosa e ativa.** Uma chave com TTL pode ser despejada quando
+   lida (preguicosa) ou por um ciclo de fundo que amostra chaves (ativa). Sem a
+   ativa, uma chave nunca mais tocada vaza memoria. Veja secao 18; `Store`.
+
+6. **Limites de recurso.** Um servidor honesto se protege de clientes que abusam:
+   um cliente que nao le suas respostas faria o buffer de escrita crescer sem
+   limite. Cap e derrube. Veja secao 18; `TcpServer`.
+
+7. **Medir, nao so raciocinar.** Quase toda afirmacao de performance neste journal
+   foi, por muito tempo, uma hipotese sem numero. O benchmark existe para
+   transformar hipotese em medida, e para refuta-la quando errada. Veja secao 18 e
+   `docs/benchmarks/methodology.md`.
+
+8. **Testes e seus limites.** Testes deterministicos checam os casos que voce
+   pensou. Fuzzing checa os que nao pensou; um teste de crash valida durabilidade
+   contra a morte real do processo. Cada tecnica tem uma fronteira do que prova.
+   Veja secao 18; `test/`.
+
+Ordem de leitura sugerida depois disto:
 
 1. Leia `README.md` para entender o produto e limites.
 2. Leia `docs/api/protocol.md` para ver o contrato externo.
@@ -694,6 +742,15 @@ replayavel.
 | `f8acbe4` | Protocolos so liam por IO bloqueante | `consume(buffer)` incremental em texto e RESP2 | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
 | `3f458b8` | Thread-por-cliente nao ensina multiplexacao | `TcpServer` virou reactor single-threaded com `IO.select` e self-pipe | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
 | `f3ad2b5` | `read_request` bloqueante ficou morto | Removido o pull bloqueante; servidor e suite usam so `consume` | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
+| `3f4f3e9` | Alegacoes de performance nunca foram medidas | Harness de benchmark (throughput, percentis, RSS) | `ruby benchmarks/bench.rb` |
+| `d8a3784` | Nagle adicionava variancia de latencia | `TCP_NODELAY` nos sockets aceitos | `ruby benchmarks/bench.rb`, `bin/check` |
+| `cbd2361` | `INFO` era O(N) e travava o loop single-threaded | Contadores fisicos incrementais tornam `INFO` O(1) | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
+| `a9fb0f8` | Entrada de diretorio nao era duravel sem fsync do dir | `fsync` de diretorio apos criar e apos `rename` | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/check` |
+| `4628077` | Durabilidade alegada nunca foi testada contra crash | Teste sobe, mata com SIGKILL e recupera pelo AOF | `ruby -Itest test/integration/crash_recovery_test.rb`, `bin/check` |
+| `cf2aa46` | Cliente que nao le faria o buffer crescer sem limite | Cap no backlog de escrita e drop da conexao | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/check` |
+| `46a3885` | Chave com TTL nunca lida vazava memoria | Ciclo de expiracao ativa limitado por amostra | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
+| `c097128` | Expiracao ativa precisava rodar sob carga | Cron tick a ~10Hz no event loop | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/check` |
+| `d39df76` | Testes deterministicos nao cobriam entrada arbitraria | Fuzz afirma totalidade de `consume` em 20k inputs | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -734,11 +791,13 @@ journal deve registrar por que o gauge veio antes do contador.
 ## 12. Limites de producao deixados fora
 
 Sem auth, TLS, ACL, RESP completo, snapshots binarios, replicacao, clustering,
-limite de conexoes, metricas completas (Prometheus/tracing), auto-compaction por
-razao de crescimento e paralelismo de comandos (o event loop e single-threaded,
-como o Redis classico: um comando CPU-bound trava o loop). Ja existem, em forma de
-estudo: event loop com `IO.select`, `fsync` opcional, compaction manual e `INFO`
-por gauges.
+limite de conexoes, `maxmemory` com eviction, tipos alem de string (listas, hashes,
+sets), metricas completas (Prometheus/tracing), auto-compaction por razao de
+crescimento e paralelismo de comandos (o event loop e single-threaded, como o Redis
+classico: um comando CPU-bound trava o loop). Ja existem, em forma de estudo: event
+loop com `IO.select` e cron, `fsync` opcional com `fsync` de diretorio, compaction
+manual, `INFO` O(1), expiracao ativa, limite de buffer de escrita por conexao,
+`TCP_NODELAY`, um harness de benchmark e um fuzz do parser.
 
 ## 13. Resultado das revisoes de qualidade
 
@@ -809,6 +868,20 @@ Evidencia: `bin/test` e `bin/check` verdes com 49 testes e 116 assertions, e um
 smoke test do processo real (texto e AOF). A secao 16 ensina a transicao em
 detalhe. Risco residual assumido: um comando CPU-bound trava o loop, o mesmo trade
 do Redis classico.
+
+Rodada de performance, durabilidade e limites: a primeira que mediu antes de
+afirmar. Trouxe um harness de benchmark, e o benchmark imediatamente provou a
+alegacao antiga de que um comando O(N) trava o loop (`INFO` derrubava 3x o
+throughput), que foi entao consertada (contadores O(1)) e re-medida. Fechou tambem a
+escada de durabilidade (`fsync` de diretorio) com um teste de crash de processo real,
+o limite de buffer de escrita contra cliente lento, a expiracao ativa contra
+vazamento de memoria, e um fuzz que afirma totalidade do parser. Em paralelo, o
+journal ganhou um primer conceitual no topo (secao 2) e a secao 17 sobre a GVL, para
+que a primeira leitura ensine os conceitos, nao so o historico. Evidencia: `bin/test`
+e `bin/check` verdes com 55 testes e 3522 assertions, mais numeros reais em
+`benchmarks/baseline.md`. As secoes 17 e 18 detalham cada decisao. Limites que
+continuam fora e agora explicitos: `maxmemory`/eviction, tipos alem de string e
+replicacao.
 
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
@@ -1182,3 +1255,173 @@ simplicidade enorme: nenhum lock no caminho de execucao de comando, nenhuma corr
 entre comandos, ordem total natural. Quando o projeto quiser escalar, o caminho nao
 e voltar a thread-por-cliente, e sim medir o custo por comando e, se preciso, rodar
 varios event loops por shard, cada um dono do seu pedaco do keyspace.
+
+## 17. Nota tecnica detalhada: concorrencia em Ruby e a GVL
+
+Varias decisoes deste projeto dependem do modelo de memoria do Ruby, mas o journal
+ate aqui o assumia. Esta secao o torna explicito, porque sem ele as licoes de
+concorrencia nao se reproduzem.
+
+### 17.1 O que a GVL e
+
+MRI (o Ruby de referencia) tem uma Global VM Lock: so uma thread executa bytecode
+Ruby por vez. Isso engana muita gente para "entao nao preciso de lock". A conclusao
+e falsa, e o ADR 0002 ja dizia "threads podem intercalar mesmo com a GVL" sem
+explicar por que. O porque e: a GVL serializa *bytecode*, nao *operacoes de alto
+nivel*. Um `@contador += 1` ou um `@entries[chave] = valor` seguido de um
+`@key_count += 1` sao varios bytecodes. A GVL pode ser liberada entre eles, e outra
+thread roda no meio.
+
+### 17.2 Quando a GVL e liberada
+
+A GVL e liberada em operacoes bloqueantes: IO (`IO.select`, ler de socket,
+`File#fsync`), `sleep`, e em pontos de checagem do escalonador. Entao uma thread que
+faz `@aof.append(...)` (que escreve em arquivo) libera a GVL durante o IO; outra
+thread acorda e roda. Foi exatamente o buraco do bug de serializacao da secao 14:
+entre `append` e a mutacao do store, o `append` faz IO, solta a GVL, e o outro
+escritor se intromete. A GVL nao protegia o par; so um lock que cobre os dois passos
+protege.
+
+### 17.3 Visibilidade de memoria
+
+Alem de atomicidade, ha visibilidade: uma escrita feita por uma thread precisa ser
+vista por outra. Em MRI, adquirir e liberar a GVL (e um `Mutex`) funciona como
+barreira de memoria: o que foi escrito antes de liberar fica visivel para quem
+adquire depois. E por isso que dois mecanismos deste servidor funcionam sem mais
+cerimonia: o `tracked_client_count`, lido pela thread de teste sob o mesmo mutex que
+a thread do loop usa para mutar `@connections`; e o self-pipe de shutdown, em que a
+escrita no pipe por uma thread e a leitura pela outra estabelecem o happens-before
+via IO. Sem essas barreiras, uma flag simples poderia nunca ser observada como
+mudada pela outra thread.
+
+### 17.4 Por que os locks continuam mesmo com o event loop
+
+Com o servidor single-threaded, nenhuma das condicoes acima se aplica ao caminho de
+comando: ha uma thread so. Entao o mutex do `Store` e o `@write_mutex` ficam sem
+contencao. A tentacao de remove-los e real, e a recusa tem duas razoes. A primeira,
+de camadas, ja esta na secao 16: concorrencia e decisao da interface. A segunda e de
+portabilidade: a GVL e detalhe de implementacao do MRI. Em JRuby ou TruffleRuby nao
+existe GVL, e threads rodam bytecode Ruby em paralelo de verdade. Ali os mutexes do
+dominio deixam de ser seguro ocioso e voltam a ser load-bearing. Manter os locks
+deixa o dominio e a aplicacao corretos em qualquer runtime e sob qualquer driver; e
+um custo quase zero por uma corretude que nao depende de uma particularidade do MRI.
+
+### 17.5 O resumo pratico
+
+- A GVL nao torna `+=`, `<<` ou escrita em hash atomicos entre threads. Sequencias
+  precisam de `Mutex`.
+- A GVL e liberada em IO e sleep; e ai que outra thread se intromete.
+- Adquirir/liberar GVL e Mutex sao barreiras de memoria; e como visibilidade
+  cross-thread acontece aqui.
+- O event loop troca tudo isso por "uma thread, uma coisa de cada vez". Os locks
+  internos ficam por camada e por portabilidade, nao por necessidade no MRI atual.
+
+## 18. Nota tecnica detalhada: rodada de performance, durabilidade e limites
+
+Esta rodada parou de afirmar e comecou a medir, e fechou varios buracos entre o que
+o journal alegava e o que estava demonstrado.
+
+### 18.1 Benchmark: por que e, sobretudo, como
+
+A motivacao primeiro. O journal tinha dezenas de frases como "o mutex unico vira
+gargalo" e "um comando O(N) trava o loop". Nenhuma tinha um numero. Uma alegacao de
+performance sem medida e uma hipotese, nao um resultado. O harness
+(`benchmarks/bench.rb`, stdlib pura) existe para transformar hipotese em medida e,
+quando for o caso, refuta-la.
+
+Como medir, ponto por ponto, porque o "como" e onde a maioria dos benchmarks mente:
+
+- **Closed loop.** Um numero fixo de conexoes, cada uma manda um comando, espera a
+  resposta, manda o proximo. Isso mede tempo de servico sob uma concorrencia fixa,
+  que e o que um servidor single-threaded oferece.
+- **Warmup com barreira.** Os primeiros comandos de cada cliente sao descartados
+  (setup de conexao, page faults, aquecimento). Os clientes aquecem, sao soltos
+  juntos por uma barreira, e so a janela medida e cronometrada. Warmup nunca
+  contamina o throughput.
+- **Percentis, nao media.** A cauda (p99, p999) e o que o usuario sente. Uma media
+  esconde um servidor rapido em 90% e congelado nos outros 10%.
+- **RESP2 no fio.** Respostas com tamanho prefixado parseiam sem ambiguidade,
+  incluindo o bulk multilinha do `INFO` que o protocolo textual nao enquadra.
+
+A primeira licao veio do proprio benchmark mentindo. A versao ingenua mostrou um
+p999 de ~48ms que sumiu quando o cliente passou a setar `TCP_NODELAY`. Com o algoritmo
+de Nagle ligado no cliente, um request pequeno fica preso no kernel do cliente
+esperando coalescer, e o delayed-ACK do servidor espera para pegar carona, gerando
+travadas de ~40ms que nao tem nada a ver com o servidor. Um benchmark com Nagle no
+cliente mede a pilha de sockets, nao o servidor. Higiene de medida primeiro.
+
+A licao principal veio depois. A carga `GET+INFO 1%` (99% GET, 1% INFO) caiu para
+~9,7k ops/s com p999 ~12ms, contra ~30k ops/s e p999 ~6ms da carga so de GET/SET.
+Apenas 1% dos comandos era `INFO`, e mesmo assim todos os clientes desaceleraram.
+Esse e o event loop single-threaded encontrando um comando O(N): o `INFO` varria
+todo o keyspace na unica thread que serve todos. A alegacao "O(N) trava o loop"
+deixou de ser hipotese. Depois do conserto (proxima subsecao), a mesma carga voltou
+a ~36k ops/s e p999 ~2ms. O benchmark achou o problema e provou o conserto. Esse e o
+ciclo inteiro: medir, mudar, medir de novo. Numeros e a evidencia em
+`benchmarks/baseline.md`.
+
+### 18.2 Complexidade como requisito: INFO de O(N) para O(1)
+
+Num servidor single-threaded, a complexidade de cada comando e um requisito, nao um
+detalhe. O `INFO` calculava `keys` e `keys_with_expiry` varrendo todas as entradas.
+O conserto foi manter contadores incrementais no `Store`, atualizados em cada
+insercao e remocao, atraves de dois unicos metodos (`store_entry`/`remove_entry`) por
+onde todo caminho de mutacao passa, para os contadores nunca divergirem.
+
+A troca honesta: um contador de chaves *vivas* nao e mantivel em O(1) com expiracao
+preguicosa, porque uma chave expira pelo relogio, sem rodar codigo que decremente.
+Entao os contadores sao *fisicos*, como o `DBSIZE` do Redis: contam entradas ainda
+presentes, incluindo as que expiraram mas nao foram despejadas. A expiracao
+preguicosa e a ativa convergem o numero fisico para o vivo. O teste documenta isso:
+uma chave expirada e contada ate algo a despejar.
+
+### 18.3 A escada da durabilidade, e o que um teste prova
+
+`flush` move o buffer do Ruby para o kernel; `fsync` forca o dado ao disco; mas a
+entrada de diretorio de um arquivo novo (ou de um `rename` de compaction) so e
+duravel apos `fsync` no proprio diretorio. Cada degrau protege contra uma falha
+diferente, e o codigo agora cobre os tres quando `fsync` esta ligado.
+
+O teste de crash mostra a fronteira do que da para provar. Ele sobe o servidor, faz
+um `SET`, recebe o `OK`, mata o processo com `SIGKILL` e sobe outro processo no mesmo
+AOF, verificando que o valor voltou. Isso prova a ordenacao write-ahead: um write
+confirmado ao cliente sobrevive a morte do processo. Mas nao prova `fsync`: o
+`SIGKILL` mata o processo, e o page cache do SO mantem o dado escrito, entao um
+registro com `flush` ja esta la para o proximo processo. `fsync` e o `fsync` de
+diretorio protegem contra queda de energia / panico de kernel, que um teste em
+espaco de usuario nao simula. Essa fronteira e a licao: recuperacao de crash de
+processo e testavel; durabilidade contra queda de energia e raciocinada, nao testada.
+
+### 18.4 Limite de recurso: o cliente que nao le
+
+O event loop bufferiza respostas por conexao para lidar com escrita parcial. Sem
+limite, um cliente que pipeline-a muitos comandos e nunca le suas respostas faria
+esse buffer crescer sem fim: exaustao de memoria por cliente lento. A defesa e a
+mesma do `client-output-buffer-limit` do Redis: limitar o backlog e derrubar a
+conexao quando passa do cap. O teste e um cliente que manda 500 respostas grandes
+sem ler nenhuma; a prova de que o servidor o derrubou e o proprio `EPIPE` que as
+escritas do cliente passam a tomar. O sinal de sucesso e o cano quebrado.
+
+### 18.5 Expiracao ativa: o vazamento que a preguica deixa
+
+Expiracao preguicosa so despeja no acesso, entao uma chave com TTL nunca mais lida
+vaza para sempre, e o contador fisico a conta. A expiracao ativa e um ciclo que
+amostra um numero limitado de chaves-com-expiracao e despeja as expiradas. Limitado e
+o ponto inteiro: uma varredura O(N) travaria o loop single-threaded em que ela roda,
+exatamente o erro que o `INFO` cometia. Para amostrar sem O(N), o `Store` mantem um
+dicionario de chaves voláteis separado. O loop a chama como o `serverCron` do Redis:
+um tique de fundo throttled a ~10Hz pelo relogio monotonico, que roda independente de
+carga e nunca fica em busy-spin. Simplificacoes assumidas e documentadas: a amostra e
+por ordem de insercao (nao aleatoria como no Redis) e nao e adaptativa (nao repete
+quando a taxa de acerto e alta).
+
+### 18.6 Fuzzing: os casos que voce nao pensou
+
+Os testes deterministicos do parser checam as entradas que imaginamos. O fuzz checa
+20.000 que nao imaginamos, com PRNG seedado para reproduzir qualquer falha. Ele
+afirma uma propriedade, nao um exemplo: `consume` e total, ou seja, para qualquer
+sequencia de bytes ele devolve `[parts, rest]`, devolve `nil` (incompleto) ou levanta
+`ProtocolError`, e nunca um erro inesperado nem um hang. Passou limpo, o que e um
+sinal forte de que o parser trata lixo arbitrario com graca. Onde o teste
+deterministico diz "esse caso funciona", o fuzz diz "nenhum caso quebra de um jeito
+que eu nao previ" -- uma garantia diferente, e mais dificil de obter com exemplos.

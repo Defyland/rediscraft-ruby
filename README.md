@@ -23,12 +23,17 @@ operability fundamentals. The repository is not a Redis replacement.
 - Text protocol over TCP, plus RESP2 as an alternate protocol adapter.
 - Commands: `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`,
   `INFO`, and `QUIT`.
-- Single-threaded event-loop server (`IO.select`) over a thread-safe in-memory store.
-- Lazy TTL expiration, deterministic between live execution and AOF replay.
-- Append-only file persistence with replay on startup, optional `fsync`, and
-  compaction that rewrites the log from live state.
-- `INFO` keyspace gauges (`keys`, `keys_with_expiry`).
-- Minitest coverage for domain, application, protocol, server, and AOF behavior.
+- Single-threaded event-loop server (`IO.select`, `TCP_NODELAY`, bounded
+  per-connection write buffer) over a thread-safe in-memory store.
+- Lazy and active TTL expiration, deterministic between live execution and AOF
+  replay.
+- Append-only file persistence with replay on startup, optional `fsync` (data and
+  directory), and compaction that rewrites the log from live state.
+- O(1) `INFO` keyspace counters (`keys`, `keys_with_expiry`).
+- Benchmark harness ([`benchmarks/bench.rb`](benchmarks/bench.rb)) and a fuzz test
+  for the RESP parser.
+- Minitest coverage for domain, application, protocol, server, AOF, crash
+  recovery, and slow-client defense.
 
 ## 5. Architecture overview
 
@@ -116,18 +121,27 @@ Then connect:
 nc 127.0.0.1 7379
 ```
 
-## 17. How to run tests
+## 17. How to run tests and benchmarks
 
 ```sh
 bin/test
 bin/check
+ruby benchmarks/bench.rb --clients 8 --ops 3000 --warmup 1000 --keys 50000
 ```
+
+See [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md) for how the
+benchmark measures (and what it deliberately does not), and
+[benchmarks/baseline.md](benchmarks/baseline.md) for collected numbers.
 
 ## 18. Failure scenarios
 
 - A partial trailing AOF record is ignored during replay.
-- Expired keys are removed lazily when read or mutated.
+- Expired keys are removed lazily on access and actively on a background cron tick.
 - A TCP client disconnect closes only that connection in the event loop.
+- A client that will not read its replies is dropped once its write backlog passes
+  the cap.
+- An acknowledged write survives a process crash (validated) but power-loss
+  durability depends on `fsync` (reasoned, not testable in-process).
 - The server is not safe for untrusted networks.
 
 ## 19. Roadmap
