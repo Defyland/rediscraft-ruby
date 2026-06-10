@@ -13,11 +13,16 @@ module Rediscraft
 
       def append(parts)
         @mutex.synchronize do
+          created = !File.exist?(@path)
           File.open(@path, "ab") do |file|
             file.write(encode(parts))
             file.flush
             file.fsync if @fsync
           end
+          # A new file's directory entry is only durable once the directory is
+          # fsynced. fsyncing the file data alone can survive a process crash but
+          # not power loss before the entry is persisted.
+          fsync_directory if @fsync && created
         end
       end
 
@@ -30,6 +35,9 @@ module Rediscraft
             file.fsync if @fsync
           end
           File.rename(temp_path, @path)
+          # The rename is atomic, but the new directory entry is only durable
+          # after the directory itself is fsynced.
+          fsync_directory if @fsync
         end
       end
 
@@ -47,6 +55,15 @@ module Rediscraft
       end
 
       private
+
+      def fsync_directory
+        File.open(File.dirname(@path)) do |dir|
+          dir.fsync
+        rescue Errno::EINVAL, NotImplementedError
+          # Some platforms reject fsync on a directory handle; nothing else to do.
+          nil
+        end
+      end
 
       def encode(parts)
         encoded_parts = parts.map do |part|

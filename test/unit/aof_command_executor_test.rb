@@ -263,7 +263,7 @@ class AofCommandExecutorTest < Minitest::Test
     end
   end
 
-  def test_fsyncs_after_append_when_enabled
+  def test_fsyncs_data_and_directory_when_creating_with_fsync
     Dir.mktmpdir do |dir|
       path = File.join(dir, "rediscraft.aof")
       aof = Rediscraft::Infrastructure::AofLog.new(path: path, fsync: true)
@@ -273,8 +273,10 @@ class AofCommandExecutorTest < Minitest::Test
         aof.append(["SET", "name", "Ada"])
       end
 
+      # One flush of the data, then two fsyncs: the file data and the directory
+      # entry, because the file was created by this append.
       assert_equal 1, recorded[:flushes]
-      assert_equal 1, recorded[:fsyncs]
+      assert_equal 2, recorded[:fsyncs]
     end
   end
 end
