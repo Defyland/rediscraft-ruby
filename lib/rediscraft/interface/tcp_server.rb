@@ -14,6 +14,7 @@ module Rediscraft
       attr_reader :port
 
       READ_CHUNK = 4096
+      CRON_INTERVAL = 0.1
 
       Connection = Struct.new(:socket, :read_buffer, :write_buffer, :close_after_flush) do
         def write_pending?
@@ -63,15 +64,28 @@ module Rediscraft
       private
 
       def event_loop
+        @last_cron = 0.0
         loop do
-          ready = IO.select([@server, @shutdown_reader] + connection_sockets, pending_write_sockets, nil)
-          next unless ready
+          ready = IO.select([@server, @shutdown_reader] + connection_sockets, pending_write_sockets, nil, CRON_INTERVAL)
+          run_cron
+          next if ready.nil?
 
           break if ready[0].include?(@shutdown_reader)
 
           ready[0].each { |io| handle_readable(io) }
           ready[1].each { |io| flush(@connections[io]) if @connections[io] }
         end
+      end
+
+      # The single-threaded analogue of Redis serverCron: bounded background work
+      # the loop does between client traffic. Throttled to ~10Hz by the monotonic
+      # clock so it runs regardless of load and never busy-spins.
+      def run_cron
+        now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        return if now - @last_cron < CRON_INTERVAL
+
+        @last_cron = now
+        @executor.active_expire_cycle
       end
 
       def handle_readable(io)
