@@ -21,11 +21,19 @@ module Rediscraft
         end
       end
 
-      def initialize(host:, port:, executor:, protocol: TextProtocol.new)
+      # A client that never reads its replies would otherwise make the server
+      # buffer responses without bound: a slow-client memory exhaustion. Cap the
+      # per-connection write backlog and drop the connection when it is exceeded,
+      # the same defense as Redis client-output-buffer-limit.
+      DEFAULT_MAX_WRITE_BUFFER = 16 * 1024 * 1024
+
+      def initialize(host:, port:, executor:, protocol: TextProtocol.new,
+                     max_write_buffer: DEFAULT_MAX_WRITE_BUFFER)
         @host = host
         @requested_port = port
         @executor = executor
         @protocol = protocol
+        @max_write_buffer = max_write_buffer
         @connections = {}
         @connections_mutex = Mutex.new
       end
@@ -107,9 +115,23 @@ module Rediscraft
           conn.read_buffer.replace(rest)
           enqueue_write(conn, @protocol.format(dispatch(parts, conn)))
           break if conn.close_after_flush
+          return if overflowed?(conn) # connection already dropped; do not flush again
         end
 
         flush(conn)
+      end
+
+      # Keeps the write backlog bounded while a client pipelines many commands.
+      # When the backlog passes the cap we flush once to give the socket a chance
+      # to drain; if it is still over, the client is not keeping up and is dropped.
+      def overflowed?(conn)
+        return false if conn.write_buffer.bytesize <= @max_write_buffer
+
+        flush(conn)
+        return false if conn.write_buffer.bytesize <= @max_write_buffer
+
+        close_connection(conn)
+        true
       end
 
       def dispatch(parts, conn)
@@ -126,6 +148,8 @@ module Rediscraft
       end
 
       def flush(conn)
+        return if conn.socket.closed?
+
         until conn.write_buffer.empty?
           written = conn.socket.write_nonblock(conn.write_buffer)
           conn.write_buffer.replace(conn.write_buffer.byteslice(written..) || "")
@@ -134,7 +158,7 @@ module Rediscraft
         close_connection(conn) if conn.close_after_flush
       rescue IO::WaitWritable
         nil
-      rescue EOFError, Errno::ECONNRESET, Errno::EPIPE
+      rescue IOError, EOFError, Errno::ECONNRESET, Errno::EPIPE
         close_connection(conn)
       end
 

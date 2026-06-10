@@ -155,6 +155,35 @@ class TcpServerTest < Minitest::Test
     thread&.join(1)
   end
 
+  def test_drops_a_client_that_will_not_drain_its_replies
+    store = Rediscraft::Domain::Store.new
+    store.set("big", "x" * 10_000)
+    executor = Rediscraft::Application::CommandExecutor.new(store: store)
+    slow_server = Rediscraft::Interface::TcpServer.new(
+      host: "127.0.0.1", port: 0, executor: executor, max_write_buffer: 1024
+    )
+    thread = Thread.new { slow_server.start }
+    sleep 0.05 until slow_server.port
+
+    socket = TCPSocket.new("127.0.0.1", slow_server.port)
+    # Pipeline many large replies and never read them: a slow-client backlog. The
+    # server drops the connection once the backlog passes the cap, so our own
+    # writes start failing -- that broken pipe is the signal we are looking for.
+    begin
+      500.times { socket.write("GET big\n") }
+    rescue Errno::EPIPE, Errno::ECONNRESET
+      nil
+    end
+
+    wait_until(timeout: 2) { slow_server.tracked_client_count.zero? }
+
+    assert_equal 0, slow_server.tracked_client_count
+  ensure
+    socket&.close
+    slow_server&.stop
+    thread&.join(1)
+  end
+
   private
 
   def build_server(protocol:)
