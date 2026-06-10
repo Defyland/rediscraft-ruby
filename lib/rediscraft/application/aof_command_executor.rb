@@ -22,10 +22,23 @@ module Rediscraft
         end
       end
 
+      def compact
+        @write_mutex.synchronize do
+          records = @inner.snapshot.flat_map { |entry| records_for(entry) }
+          @aof.rewrite(records)
+        end
+      end
+
       private
 
       def durable_parts_for(parts)
         CommandRegistry.durable_parts_for(parts, clock: @clock)
+      end
+
+      def records_for(entry)
+        records = [["SET", entry[:key], entry[:value]]]
+        records << ["EXPIREAT", entry[:key], entry[:expires_at].to_f.to_s] unless entry[:expires_at].nil?
+        records
       end
     end
   end

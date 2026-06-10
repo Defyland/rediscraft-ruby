@@ -21,6 +21,18 @@ module Rediscraft
         end
       end
 
+      def rewrite(records)
+        @mutex.synchronize do
+          temp_path = "#{@path}.tmp"
+          File.open(temp_path, "wb") do |file|
+            records.each { |parts| file.write(encode(parts)) }
+            file.flush
+            file.fsync if @fsync
+          end
+          File.rename(temp_path, @path)
+        end
+      end
+
       def replay(applicator)
         return unless File.exist?(@path)
 

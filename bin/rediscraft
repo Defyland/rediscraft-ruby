@@ -16,7 +16,8 @@ options = {
   host: "127.0.0.1",
   port: 7379,
   protocol: "text",
-  fsync: false
+  fsync: false,
+  compact_on_start: false
 }
 
 OptionParser.new do |parser|
@@ -26,6 +27,7 @@ OptionParser.new do |parser|
   parser.on("--protocol PROTOCOL", "text or resp2") { |value| options[:protocol] = value }
   parser.on("--aof PATH", "Append-only file for durability and startup replay") { |value| options[:aof] = value }
   parser.on("--fsync", "fsync the AOF after every append (durable, slower)") { options[:fsync] = true }
+  parser.on("--compact-on-start", "rewrite the AOF from live state after replay") { options[:compact_on_start] = true }
 end.parse!
 
 protocol = case options[:protocol]
@@ -44,6 +46,7 @@ if options[:aof]
   aof = Rediscraft::Infrastructure::AofLog.new(path: options[:aof], fsync: options[:fsync])
   aof.replay(executor)
   executor = Rediscraft::Application::AofCommandExecutor.new(inner: executor, aof: aof)
+  executor.compact if options[:compact_on_start]
 end
 
 server = Rediscraft::Interface::TcpServer.new(

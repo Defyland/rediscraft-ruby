@@ -215,6 +215,38 @@ class AofCommandExecutorTest < Minitest::Test
       "durable record order must match the order mutations reached the store"
   end
 
+  def test_compact_rewrites_aof_to_minimal_replayable_state
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "rediscraft.aof")
+      now = Time.utc(2026, 1, 1, 12, 0, 0)
+      store = Rediscraft::Domain::Store.new(clock: -> { now })
+      inner = Rediscraft::Application::CommandExecutor.new(store: store)
+      aof = Rediscraft::Infrastructure::AofLog.new(path: path)
+      executor = Rediscraft::Application::AofCommandExecutor.new(inner: inner, aof: aof, clock: -> { now })
+
+      executor.execute(["SET", "name", "Ada"])
+      executor.execute(["SET", "name", "Grace"])
+      executor.execute(["SET", "temp", "x"])
+      executor.execute(["DEL", "temp"])
+      executor.execute(["SET", "session", "abc"])
+      executor.execute(["EXPIRE", "session", "60"])
+
+      size_before = File.size(path)
+      executor.compact
+      size_after = File.size(path)
+
+      assert_operator size_after, :<, size_before
+
+      replayed = Rediscraft::Domain::Store.new(clock: -> { now })
+      aof.replay(Rediscraft::Application::CommandExecutor.new(store: replayed))
+
+      assert_equal "Grace", replayed.get("name")
+      assert_nil replayed.get("temp")
+      assert_equal "abc", replayed.get("session")
+      assert_equal 60, replayed.ttl("session")
+    end
+  end
+
   def test_flushes_without_fsync_by_default
     Dir.mktmpdir do |dir|
       path = File.join(dir, "rediscraft.aof")

@@ -88,6 +88,17 @@ module Rediscraft
         end
       end
 
+      def snapshot
+        @mutex.synchronize do
+          now = @clock.call
+          @entries.filter_map do |key, entry|
+            next if entry.expired?(now)
+
+            { key: key, value: entry.value, expires_at: entry.expires_at }
+          end
+        end
+      end
+
       private
 
       def live_entry_for(key)

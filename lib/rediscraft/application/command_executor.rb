@@ -64,6 +64,10 @@ module Rediscraft
         nil
       end
 
+      def snapshot
+        @store.snapshot
+      end
+
       private
 
       def execute_set(parts)
