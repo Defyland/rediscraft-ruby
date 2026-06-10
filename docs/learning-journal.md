@@ -681,19 +681,19 @@ replayavel.
 | `05a9349` | `stop` nao encerrava clientes ociosos | TCP passa a rastrear e fechar sockets ativos | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
 | `7b3dc30` | AOF aceitava bytes extras no frame | Decoder exige consumo exato do payload | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
 | `9fd849f` | Contrato duravel/replay dependia de revisao manual | Teste cobre todos os comandos duraveis publicos contra replay | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
-| `8e5115f` | Append e mutacao do AOF eram secoes criticas separadas | `AofCommandExecutor` serializa append e mutacao no mesmo mutex de escrita | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
-| `002520f` | Formatter textual carregava heuristica morta | Remocao do fallback inalcancavel; formatter so trata `Response` ou `nil` | `bin/test`, `bin/check` |
-| `b7789b4` | `delete` escondia expiracao preguicosa load-bearing | Intencao explicita no delete e teste de `DEL` em chave expirada | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
-| `815ff40` | Help do `--aof` dizia "future support" para recurso ativo | Texto de CLI alinhado ao comportamento real | `ruby -c bin/rediscraft`, `bin/test`, `bin/check` |
-| `4486faa` | Toolchain pinada em Ruby 3.4.2 | Bump para 3.4.9 em `.ruby-version` e `.tool-versions` | `bin/check` |
-| `4b8c75d` | EXPIRE vivo divergia do replay (relogio duplo e truncagem) | Execucao viva aplica o registro persistido em precisao cheia | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
-| `5f94b73` | `apply_durable` e `apply_record` duplicavam o mapeamento | Replay aplica pelo mesmo `apply_durable` via aplicador injetado | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
-| `d5a748d` | AOF so dava flush, sem garantia em disco | `fsync` opcional por append e flag `--fsync` | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
-| `30a9a92` | Faltava qualquer observabilidade | Comando `INFO` com gauges de keyspace | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
-| `19ecdf2` | AOF crescia sem limite | Compaction reescreve o log do estado vivo via `rename` atomico | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
-| `38441c6` | Protocolos so liam por IO bloqueante | `consume(buffer)` incremental em texto e RESP2 | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
-| `a94fb31` | Thread-por-cliente nao ensina multiplexacao | `TcpServer` virou reactor single-threaded com `IO.select` e self-pipe | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
-| `6eb7867` | `read_request` bloqueante ficou morto | Removido o pull bloqueante; servidor e suite usam so `consume` | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
+| `2d6cb29` | Append e mutacao do AOF eram secoes criticas separadas | `AofCommandExecutor` serializa append e mutacao no mesmo mutex de escrita | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `6a0e3f9` | Formatter textual carregava heuristica morta | Remocao do fallback inalcancavel; formatter so trata `Response` ou `nil` | `bin/test`, `bin/check` |
+| `079b998` | `delete` escondia expiracao preguicosa load-bearing | Intencao explicita no delete e teste de `DEL` em chave expirada | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
+| `f8c4be2` | Help do `--aof` dizia "future support" para recurso ativo | Texto de CLI alinhado ao comportamento real | `ruby -c bin/rediscraft`, `bin/test`, `bin/check` |
+| `12400ca` | Toolchain pinada em Ruby 3.4.2 | Bump para 3.4.9 em `.ruby-version` e `.tool-versions` | `bin/check` |
+| `d635ba3` | EXPIRE vivo divergia do replay (relogio duplo e truncagem) | Execucao viva aplica o registro persistido em precisao cheia | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `42fc1a7` | `apply_durable` e `apply_record` duplicavam o mapeamento | Replay aplica pelo mesmo `apply_durable` via aplicador injetado | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `29b0f85` | AOF so dava flush, sem garantia em disco | `fsync` opcional por append e flag `--fsync` | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `2150bd5` | Faltava qualquer observabilidade | Comando `INFO` com gauges de keyspace | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
+| `401f8e2` | AOF crescia sem limite | Compaction reescreve o log do estado vivo via `rename` atomico | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `f8acbe4` | Protocolos so liam por IO bloqueante | `consume(buffer)` incremental em texto e RESP2 | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
+| `3f458b8` | Thread-por-cliente nao ensina multiplexacao | `TcpServer` virou reactor single-threaded com `IO.select` e self-pipe | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
+| `f3ad2b5` | `read_request` bloqueante ficou morto | Removido o pull bloqueante; servidor e suite usam so `consume` | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
