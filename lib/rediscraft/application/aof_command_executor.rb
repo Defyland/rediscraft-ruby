@@ -9,13 +9,17 @@ module Rediscraft
         @inner = inner
         @aof = aof
         @clock = clock
+        @write_mutex = Mutex.new
       end
 
       def execute(parts)
         durable_parts = durable_parts_for(parts)
-        @aof.append(durable_parts) if durable_parts
-        response = @inner.execute(parts)
-        response
+        return @inner.execute(parts) if durable_parts.nil?
+
+        @write_mutex.synchronize do
+          @aof.append(durable_parts)
+          @inner.execute(parts)
+        end
       end
 
       private

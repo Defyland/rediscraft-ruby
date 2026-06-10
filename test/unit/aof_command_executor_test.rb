@@ -139,4 +139,36 @@ class AofCommandExecutorTest < Minitest::Test
     assert_raises(IOError) { executor.execute(["SET", "name", "Ada"]) }
     assert_nil store.get("name")
   end
+
+  def test_serializes_durable_record_with_store_mutation
+    store = Rediscraft::Domain::Store.new
+    inner = Rediscraft::Application::CommandExecutor.new(store: store)
+
+    appended = []
+    release = Queue.new
+    first_parked = Queue.new
+    parked = false
+
+    recording_aof = Object.new
+    recording_aof.define_singleton_method(:append) do |parts|
+      appended << parts
+      unless parked
+        parked = true
+        first_parked << true
+        release.pop
+      end
+    end
+
+    executor = Rediscraft::Application::AofCommandExecutor.new(inner: inner, aof: recording_aof)
+
+    first_writer = Thread.new { executor.execute(["SET", "key", "first"]) }
+    first_parked.pop
+    second_writer = Thread.new { executor.execute(["SET", "key", "second"]) }
+    second_writer.join(0.2)
+    release << true
+    [first_writer, second_writer].each { |thread| thread.join(1) }
+
+    assert_equal store.get("key"), appended.last[2],
+      "durable record order must match the order mutations reached the store"
+  end
 end
