@@ -32,28 +32,15 @@ module Rediscraft
       def format(response)
         return "$-1\n" if response.nil?
 
-        if response.is_a?(Rediscraft::Application::Response)
-          return "-#{response.payload}\n" if response.status == :error
+        return "-#{response.payload}\n" if response.status == :error
+        return "$-1\n" if response.kind == :bulk && response.payload.nil?
+        return bulk(response.payload) if response.kind == :bulk
+        return ":#{response.payload}\n" if response.kind == :integer
 
-          return "$-1\n" if response.kind == :bulk && response.payload.nil?
-          return bulk(response.payload) if response.kind == :bulk
-          return ":#{response.payload}\n" if response.kind == :integer
-          return "+#{response.payload}\n" if response.kind == :simple
-
-          format(response.payload)
-        elsif response.is_a?(Integer)
-          ":#{response}\n"
-        else
-          value = response.to_s
-          simple_string?(value) ? "+#{value}\n" : "$#{value.bytesize} #{value}\n"
-        end
+        "+#{response.payload}\n"
       end
 
       private
-
-      def simple_string?(value)
-        value.match?(/\A[A-Z][A-Z0-9 _-]*\z/)
-      end
 
       def bulk(value)
         string = value.to_s
