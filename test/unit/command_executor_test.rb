@@ -108,6 +108,22 @@ class CommandExecutorTest < Minitest::Test
     assert_equal "keys:0\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
   end
 
+  def test_active_expire_cycle_evicts_untouched_expired_keys
+    @executor.execute(["SET", "a", "1"])
+    @executor.execute(["EXPIRE", "a", "10"])
+    @executor.execute(["SET", "b", "2"])
+
+    @now += 11
+
+    # "a" is logically expired but nobody touched it, so it is still physical.
+    assert_equal "keys:2\nkeys_with_expiry:1", @executor.execute(["INFO"]).payload
+
+    evicted = @executor.active_expire_cycle
+
+    assert_equal 1, evicted
+    assert_equal "keys:1\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
+  end
+
   def test_expire_at_is_not_a_public_command
     response = @executor.execute(["EXPIREAT", "session", "1767268860"])
 

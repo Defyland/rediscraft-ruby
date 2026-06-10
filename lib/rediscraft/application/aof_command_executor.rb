@@ -29,6 +29,10 @@ module Rediscraft
         end
       end
 
+      def active_expire_cycle
+        @inner.active_expire_cycle
+      end
+
       private
 
       def durable_parts_for(parts)

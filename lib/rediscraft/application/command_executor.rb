@@ -68,6 +68,10 @@ module Rediscraft
         @store.snapshot
       end
 
+      def active_expire_cycle
+        @store.active_expire_cycle
+      end
+
       private
 
       def execute_set(parts)

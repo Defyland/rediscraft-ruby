@@ -16,6 +16,9 @@ module Rediscraft
         # yet; lazy and active expiration converge them toward the live count.
         @key_count = 0
         @volatile_count = 0
+        # Keys that carry an expiry, so active expiration can sample them without
+        # walking the whole keyspace.
+        @expires = {}
       end
 
       def set(key, value, ttl_seconds: nil)
@@ -102,6 +105,27 @@ module Rediscraft
         end
       end
 
+      # Lazy expiration only evicts a key when it is read, so a key that is set
+      # with a TTL and never touched again leaks forever. Active expiration samples
+      # a bounded number of keys-with-expiry and evicts the expired ones. Bounded
+      # is the whole point: an O(N) sweep would stall the single-threaded loop it
+      # runs on. Sampling is insertion-ordered here, a simplification of Redis's
+      # random sampling, and it is not adaptive (no repeat on a high hit rate).
+      def active_expire_cycle(sample: 20)
+        @mutex.synchronize do
+          now = @clock.call
+          evicted = 0
+          @expires.keys.first(sample).each do |key|
+            entry = @entries[key]
+            next unless entry&.expired?(now)
+
+            remove_entry(key)
+            evicted += 1
+          end
+          evicted
+        end
+      end
+
       private
 
       # The only two methods that touch @entries directly, so the counters can
@@ -110,7 +134,10 @@ module Rediscraft
         remove_entry(key)
         @entries[key] = entry
         @key_count += 1
-        @volatile_count += 1 unless entry.expires_at.nil?
+        unless entry.expires_at.nil?
+          @volatile_count += 1
+          @expires[key] = entry.expires_at
+        end
       end
 
       def remove_entry(key)
@@ -118,7 +145,10 @@ module Rediscraft
         return if entry.nil?
 
         @key_count -= 1
-        @volatile_count -= 1 unless entry.expires_at.nil?
+        unless entry.expires_at.nil?
+          @volatile_count -= 1
+          @expires.delete(key)
+        end
       end
 
       def live_entry_for(key)
