@@ -77,6 +77,7 @@ module Rediscraft
 
       def accept_connection
         socket = @server.accept_nonblock
+        socket.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1)
         @connections_mutex.synchronize do
           @connections[socket] = Connection.new(socket, +"", +"", false)
         end
