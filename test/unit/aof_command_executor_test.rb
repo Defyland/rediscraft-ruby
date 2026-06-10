@@ -33,9 +33,33 @@ class AofCommandExecutorTest < Minitest::Test
           "@15\n*2 3 DEL 4 name",
           "@18\n*2 3 DEL 7 missing",
           "@24\n*3 3 SET 7 session 3 abc",
-          "@37\n*3 8 EXPIREAT 7 session 10 1767268860"
+          "@39\n*3 8 EXPIREAT 7 session 12 1767268860.0"
         ].join,
         File.read(path)
+    end
+  end
+
+  def test_durable_expire_replays_to_the_exact_live_instant
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "rediscraft.aof")
+      base = Time.utc(2026, 1, 1, 12, 0, 0)
+      now = base + 0.7
+      clock = -> { now }
+      store = Rediscraft::Domain::Store.new(clock: clock)
+      inner = Rediscraft::Application::CommandExecutor.new(store: store)
+      aof = Rediscraft::Infrastructure::AofLog.new(path: path)
+      executor = Rediscraft::Application::AofCommandExecutor.new(inner: inner, aof: aof, clock: clock)
+
+      executor.execute(["SET", "session", "abc"])
+      executor.execute(["EXPIRE", "session", "60"])
+
+      replayed = Rediscraft::Domain::Store.new(clock: clock)
+      aof.replay(replayed)
+
+      now = base + 60.3
+
+      assert_equal store.get("session"), replayed.get("session")
+      assert_equal store.ttl("session"), replayed.ttl("session")
     end
   end
 

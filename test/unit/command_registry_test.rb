@@ -18,7 +18,7 @@ class CommandRegistryTest < Minitest::Test
     registry = Rediscraft::Application::CommandRegistry
 
     assert_equal ["SET", "name", "Ada"], registry.durable_parts_for(["SET", "name", "Ada"], clock: -> { now })
-    assert_equal ["EXPIREAT", "session", "1767268860"], registry.durable_parts_for(["EXPIRE", "session", "60"], clock: -> { now })
+    assert_equal ["EXPIREAT", "session", "1767268860.0"], registry.durable_parts_for(["EXPIRE", "session", "60"], clock: -> { now })
     assert_nil registry.durable_parts_for(["GET", "name"], clock: -> { now })
     assert_nil registry.durable_parts_for(["EXPIRE", "session", "-1"], clock: -> { now })
     assert_nil registry.durable_parts_for(["SET", "name"], clock: -> { now })

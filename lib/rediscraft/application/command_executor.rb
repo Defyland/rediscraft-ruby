@@ -38,6 +38,30 @@ module Rediscraft
         end
       end
 
+      def apply_durable(record)
+        case record.first
+        when "SET"
+          return nil unless record.length == 3
+
+          @store.set(record[1], record[2])
+          Response.simple("OK")
+        when "DEL"
+          return nil unless record.length == 2
+
+          Response.integer(@store.delete(record[1]))
+        when "EXPIREAT"
+          return nil unless record.length == 3
+
+          Response.integer(@store.expire_at(record[1], Time.at(Float(record[2])).utc))
+        when "PERSIST"
+          return nil unless record.length == 2
+
+          Response.integer(@store.persist(record[1]))
+        end
+      rescue ArgumentError
+        nil
+      end
+
       private
 
       def execute_set(parts)

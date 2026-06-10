@@ -18,7 +18,7 @@ module Rediscraft
 
         @write_mutex.synchronize do
           @aof.append(durable_parts)
-          @inner.execute(parts)
+          @inner.apply_durable(durable_parts)
         end
       end
 

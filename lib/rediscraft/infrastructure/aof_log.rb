@@ -43,7 +43,7 @@ module Rediscraft
         when "DEL"
           store.delete(parts[1]) if parts.length == 2
         when "EXPIREAT"
-          store.expire_at(parts[1], Time.at(Integer(parts[2], 10)).utc) if parts.length == 3
+          store.expire_at(parts[1], Time.at(Float(parts[2])).utc) if parts.length == 3
         when "PERSIST"
           store.persist(parts[1]) if parts.length == 2
         end

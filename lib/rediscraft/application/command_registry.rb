@@ -53,7 +53,7 @@ module Rediscraft
           ttl_seconds = parse_non_negative_integer(parts[2])
           return nil if ttl_seconds.nil?
 
-          ["EXPIREAT", parts[1], (clock.call + ttl_seconds).to_i.to_s]
+          ["EXPIREAT", parts[1], (clock.call + ttl_seconds).to_f.to_s]
         end
       end
 
