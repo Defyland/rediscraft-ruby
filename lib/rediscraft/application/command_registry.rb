@@ -17,7 +17,8 @@ module Rediscraft
         Spec.new(name: "EXISTS", arity: 2, durable: false),
         Spec.new(name: "EXPIRE", arity: 3, durable: true),
         Spec.new(name: "TTL", arity: 2, durable: false),
-        Spec.new(name: "PERSIST", arity: 2, durable: true)
+        Spec.new(name: "PERSIST", arity: 2, durable: true),
+        Spec.new(name: "INFO", arity: 1, durable: false)
       ].each_with_object({}) { |spec, specs| specs[spec.name] = spec }.freeze
 
       def self.public_names

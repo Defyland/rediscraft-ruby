@@ -33,6 +33,8 @@ module Rediscraft
           execute_ttl(parts)
         when "PERSIST"
           execute_persist(parts)
+        when "INFO"
+          execute_info(parts)
         else
           Response.error("ERR unknown command")
         end
@@ -94,6 +96,12 @@ module Rediscraft
 
       def execute_persist(parts)
         Response.integer(@store.persist(parts[1]))
+      end
+
+      def execute_info(_parts)
+        summary = @store.keyspace_summary
+
+        Response.bulk("keys:#{summary[:keys]}\nkeys_with_expiry:#{summary[:keys_with_expiry]}")
       end
     end
   end

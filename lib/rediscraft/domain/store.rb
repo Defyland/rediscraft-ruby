@@ -79,6 +79,15 @@ module Rediscraft
         end
       end
 
+      def keyspace_summary
+        @mutex.synchronize do
+          now = @clock.call
+          live = @entries.values.reject { |entry| entry.expired?(now) }
+
+          { keys: live.size, keys_with_expiry: live.count { |entry| !entry.expires_at.nil? } }
+        end
+      end
+
       private
 
       def live_entry_for(key)

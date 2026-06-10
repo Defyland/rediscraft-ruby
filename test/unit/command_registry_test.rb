@@ -5,7 +5,7 @@ class CommandRegistryTest < Minitest::Test
   def test_defines_public_commands_with_arity_and_durability
     registry = Rediscraft::Application::CommandRegistry
 
-    assert_equal %w[PING SET GET DEL EXISTS EXPIRE TTL PERSIST], registry.public_names
+    assert_equal %w[PING SET GET DEL EXISTS EXPIRE TTL PERSIST INFO], registry.public_names
     assert registry.valid_arity?(["SET", "name", "Ada"])
     refute registry.valid_arity?(["SET", "name"])
     assert registry.durable?("SET")

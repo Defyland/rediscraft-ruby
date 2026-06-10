@@ -64,6 +64,17 @@ class CommandExecutorTest < Minitest::Test
     assert_equal(-2, @executor.execute(["TTL", "session"]).payload)
   end
 
+  def test_info_reports_keyspace_summary
+    @executor.execute(["SET", "name", "Ada"])
+    @executor.execute(["SET", "session", "abc"])
+    @executor.execute(["EXPIRE", "session", "10"])
+
+    response = @executor.execute(["INFO"])
+
+    assert_equal :bulk, response.kind
+    assert_equal "keys:2\nkeys_with_expiry:1", response.payload
+  end
+
   def test_expire_at_is_not_a_public_command
     response = @executor.execute(["EXPIREAT", "session", "1767268860"])
 
