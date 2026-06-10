@@ -7,13 +7,6 @@ module Rediscraft
     class TextProtocol
       VALUE_TAIL_COMMANDS = ["SET"].freeze
 
-      def read_request(io)
-        line = io.gets
-        return nil if line.nil?
-
-        parse(line)
-      end
-
       # Incremental parse for the event loop. Returns [parts, rest] once a full
       # newline-terminated line is buffered, or nil when more bytes are needed.
       def consume(buffer)
