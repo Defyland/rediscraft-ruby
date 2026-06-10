@@ -75,6 +75,39 @@ class CommandExecutorTest < Minitest::Test
     assert_equal "keys:2\nkeys_with_expiry:1", response.payload
   end
 
+  def test_info_tracks_mutations_in_constant_time
+    assert_equal "keys:0\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
+
+    @executor.execute(["SET", "a", "1"])
+    @executor.execute(["SET", "b", "2"])
+    @executor.execute(["SET", "a", "again"])
+    assert_equal "keys:2\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
+
+    @executor.execute(["EXPIRE", "a", "100"])
+    assert_equal "keys:2\nkeys_with_expiry:1", @executor.execute(["INFO"]).payload
+
+    @executor.execute(["PERSIST", "a"])
+    assert_equal "keys:2\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
+
+    @executor.execute(["DEL", "b"])
+    assert_equal "keys:1\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
+  end
+
+  def test_info_counts_keys_until_lazy_eviction
+    @executor.execute(["SET", "session", "abc"])
+    @executor.execute(["EXPIRE", "session", "10"])
+
+    @now += 11
+
+    # Physical count, like Redis DBSIZE: a logically expired key is still counted
+    # until something evicts it.
+    assert_equal "keys:1\nkeys_with_expiry:1", @executor.execute(["INFO"]).payload
+
+    @executor.execute(["GET", "session"]) # lazy access evicts it
+
+    assert_equal "keys:0\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
+  end
+
   def test_expire_at_is_not_a_public_command
     response = @executor.execute(["EXPIREAT", "session", "1767268860"])
 
