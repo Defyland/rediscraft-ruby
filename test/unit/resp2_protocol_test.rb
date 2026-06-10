@@ -53,4 +53,26 @@ class Resp2ProtocolTest < Minitest::Test
       @protocol.read_request(StringIO.new("$5\r\nabc"))
     end
   end
+
+  def test_consume_parses_array_command_and_returns_rest
+    assert_equal [["SET", "name", "Ada"], ""],
+      @protocol.consume("*3\r\n$3\r\nSET\r\n$4\r\nname\r\n$3\r\nAda\r\n")
+  end
+
+  def test_consume_returns_nil_on_partial_frame
+    assert_nil @protocol.consume("*3\r\n$3\r\nSET\r\n$4\r\nna")
+  end
+
+  def test_consume_keeps_trailing_bytes_of_the_next_frame
+    parts, rest = @protocol.consume("*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nQUIT\r\n")
+
+    assert_equal ["PING"], parts
+    assert_equal "*1\r\n$4\r\nQUIT\r\n", rest
+  end
+
+  def test_consume_rejects_null_bulk_in_command
+    assert_raises(Rediscraft::Interface::ProtocolError) do
+      @protocol.consume("*3\r\n$3\r\nSET\r\n$4\r\nname\r\n$-1\r\n")
+    end
+  end
 end

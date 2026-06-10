@@ -29,4 +29,14 @@ class TextProtocolTest < Minitest::Test
 
     assert_equal "$2 OK\n", @protocol.format(response)
   end
+
+  def test_consume_returns_command_and_rest_once_line_is_complete
+    assert_equal [["PING"], ""], @protocol.consume("PING\n")
+    assert_equal [["SET", "name", "Ada"], "GET name\n"],
+      @protocol.consume("SET name Ada\nGET name\n")
+  end
+
+  def test_consume_returns_nil_until_a_newline_arrives
+    assert_nil @protocol.consume("PIN")
+  end
 end

@@ -14,6 +14,17 @@ module Rediscraft
         parse(line)
       end
 
+      # Incremental parse for the event loop. Returns [parts, rest] once a full
+      # newline-terminated line is buffered, or nil when more bytes are needed.
+      def consume(buffer)
+        index = buffer.index("\n")
+        return nil if index.nil?
+
+        line = buffer.byteslice(0, index + 1)
+        rest = buffer.byteslice(index + 1..) || ""
+        [parse(line), rest]
+      end
+
       def parse(line)
         stripped = line.to_s.strip
         return [] if stripped.empty?
