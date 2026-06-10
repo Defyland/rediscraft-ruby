@@ -55,6 +55,36 @@ class Resp2ProtocolTest < Minitest::Test
     end
   end
 
+  # Property / fuzz test. The deterministic cases above check inputs we thought
+  # of; this checks the ones we did not. consume must be total: for ANY byte
+  # string it returns [parts, rest], returns nil (incomplete), or raises
+  # ProtocolError -- never an unexpected error and never a hang. Seeded so a
+  # failure is reproducible.
+  def test_consume_is_total_on_random_input
+    prng = Random.new(20_260_610)
+    tokens = ["*", "$", "+", "-", ":", "\r\n", "\r", "\n", "0", "1", "-1", "2",
+              "99999", "SET", " ", "\x00", "abc"]
+
+    20_000.times do
+      input = Array.new(prng.rand(1..14)) { tokens.sample(random: prng) }.join
+
+      begin
+        result = @protocol.consume(input)
+      rescue Rediscraft::Interface::ProtocolError
+        next
+      rescue StandardError => e
+        flunk "consume raised #{e.class} on #{input.inspect}: #{e.message}"
+      end
+
+      next if result.nil?
+
+      parts, rest = result
+      assert_kind_of Array, parts
+      assert(parts.all?(String), "parts must be strings: #{parts.inspect}")
+      assert_kind_of String, rest
+    end
+  end
+
   def test_formats_application_responses
     assert_equal "+PONG\r\n", @protocol.format(Rediscraft::Application::Response.simple("PONG"))
     assert_equal "$3\r\nAda\r\n", @protocol.format(Rediscraft::Application::Response.bulk("Ada"))
