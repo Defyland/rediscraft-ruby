@@ -22,10 +22,12 @@ operability fundamentals. The repository is not a Redis replacement.
 
 - Text protocol over TCP, plus RESP2 as an alternate protocol adapter.
 - Commands: `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`,
-  and `QUIT`.
+  `INFO`, and `QUIT`.
 - Thread-safe in-memory store.
-- Lazy TTL expiration.
-- Append-only file persistence with replay on startup.
+- Lazy TTL expiration, deterministic between live execution and AOF replay.
+- Append-only file persistence with replay on startup, optional `fsync`, and
+  compaction that rewrites the log from live state.
+- `INFO` keyspace gauges (`keys`, `keys_with_expiry`).
 - Minitest coverage for domain, application, protocol, server, and AOF behavior.
 
 ## 5. Architecture overview
@@ -81,8 +83,10 @@ rules are stable. Benchmark methodology is documented in
 
 ## 13. Observability
 
-The first slice exposes no metrics. The next observability step is a small
-`INFO` command with counters before Prometheus or tracing.
+`INFO` exposes keyspace gauges (`keys`, `keys_with_expiry`) read from live store
+state. A request counter is intentionally deferred until a shared metrics object
+justifies coupling the executor to the dispatch point; full metrics
+(Prometheus/tracing) remain out of scope.
 
 ## 14. Security considerations
 
@@ -100,6 +104,7 @@ before sharding.
 ```sh
 ruby bin/rediscraft --host 127.0.0.1 --port 7379 --aof data/rediscraft.aof
 ruby bin/rediscraft --host 127.0.0.1 --port 7379 --protocol resp2
+ruby bin/rediscraft --aof data/rediscraft.aof --fsync --compact-on-start
 ```
 
 Then connect:
@@ -124,8 +129,8 @@ bin/check
 
 ## 19. Roadmap
 
-- Add `INFO` counters and admin visibility.
-- Add snapshots after AOF compaction is justified.
+- Add an `INFO` request counter once a shared metrics object justifies it.
+- Add auto-compaction by growth ratio on top of the existing manual compaction.
 - Expand RESP compatibility and add protocol negotiation only if it teaches a
   concrete boundary lesson.
 - Add simple benchmarks for throughput and memory growth.

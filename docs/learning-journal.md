@@ -90,6 +90,19 @@ desenho pequeno: um unico mutex de escrita no decorator de AOF, remocao de codig
 morto no formatter, intencao explicita no delete e texto de CLI alinhado ao
 comportamento.
 
+A rodada seguinte saiu do modo "revisao corrige achados" e entrou no modo
+"evolucao dirigida": subir o Ruby para 3.4.9 e implementar quatro itens que antes
+estavam documentados como fora de escopo. Primeiro o determinismo do EXPIRE: o
+registro duravel persistia um instante absoluto, mas a execucao viva re-resolvia
+um TTL relativo no store, com outro relogio e outra precisao, entao `expires_at`
+vivo podia divergir do `expires_at` reconstruido por replay. A correcao fez a
+execucao viva aplicar o mesmo registro que persiste, com uma unica leitura de
+relogio e precisao cheia. Depois, `fsync` configuravel no AOF, separando a
+garantia de durabilidade da garantia de throughput. Depois, o comando `INFO`
+expondo gauges de keyspace, a primeira fatia de observabilidade. Por fim,
+compaction do AOF reescrevendo o log a partir do estado vivo, encerrando o
+crescimento ilimitado.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -174,6 +187,42 @@ comportamento real. A alternativa rejeitada foi tratar texto de CLI como
 cosmetico; um help que promete "future support" para um recurso ativo corroi a
 confianca de quem opera o servidor.
 
+Aplicar o registro persistido na execucao viva: escolhido para que a execucao e o
+replay derivem do mesmo instante e da mesma precisao. A alternativa rejeitada foi
+apenas compartilhar um relogio entre store e decorator; isso reduz, mas nao
+elimina, a divergencia, porque ainda existem duas leituras de relogio e a
+truncagem de `EXPIREAT` continuava distinta da precisao do store.
+
+Persistir o instante em precisao cheia (`to_f`) em vez de truncar para segundo
+inteiro: escolhido para nao degradar a precisao viva so para casar com um formato
+de log lossy. A alternativa rejeitada foi truncar o `expires_at` vivo para o
+segundo; isso casaria os dois lados, mas fazendo a chave expirar antes do
+combinado.
+
+Unificar replay e execucao viva em `apply_durable`: escolhido para que "live ==
+replay" seja o mesmo metodo, e nao duas copias que precisam concordar. A
+alternativa rejeitada foi manter `AofLog#apply_record` separado; isso recriava a
+duplicacao que o `CommandRegistry` existe para evitar. O replay passou a receber
+um aplicador injetado, mantendo a infraestrutura como folha que so chama um metodo
+do colaborador.
+
+`fsync` configuravel, desligado por padrao: escolhido porque durabilidade forte e
+throughput sao garantias diferentes, e o default preserva o comportamento atual. A
+alternativa rejeitada foi ligar `fsync` sempre, o que tornaria cada append uma
+escrita sincrona no disco sem o operador pedir.
+
+`INFO` como gauges de keyspace em vez de contador de requests: escolhido porque
+gauges saem do estado do store, sem seam transversal. A alternativa rejeitada foi
+um contador de comandos agora; ele acoplaria o executor ao ponto de dispatch e
+teria de ser deduplicado entre o decorator de AOF e o replay, entao foi adiado ate
+existir um objeto de metricas que justifique o acoplamento.
+
+Compaction a partir do estado vivo, com trigger no boot: escolhido porque reescrever
+o log a partir do snapshot e a forma mais direta de limitar crescimento sem um
+formato de snapshot separado. A alternativa rejeitada foi auto-compactar por razao
+de crescimento em background; isso exigiria uma thread e contabilidade de tamanho
+antes de a licao de "reescrever o estado minimo" estar clara.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
@@ -218,6 +267,24 @@ entradas avulsas que, de qualquer forma, nunca chegavam pela borda TCP.
 
 Delete explicito custa duas linhas a mais que a versao compacta, mas paga isso
 tornando a regra de expiracao visivel no ponto onde ela importa.
+
+EXPIREAT em precisao cheia round-trip exatamente entre execucao e replay, mas
+torna o registro um pouco maior (`1767268860.0` em vez de `1767268860`) e expoe
+que a granularidade real do EXPIRE agora segue a precisao do relogio, nao o
+segundo redondo.
+
+`fsync` por append da durabilidade real contra queda de energia, mas troca
+throughput por seguranca: cada escrita vira sincrona. Por isso fica desligado por
+padrao e documentado como decisao do operador.
+
+`INFO` por gauges e barato e nao acopla camadas, mas nao responde "quantos
+comandos ja processei". Esse contador foi adiado de proposito; o journal registra
+que a ausencia e uma escolha, nao um esquecimento.
+
+Compaction encerra o crescimento do AOF e o arquivo novo reconstroi o mesmo estado,
+mas e lossy por design: a historia de mutacoes some, ficando so o estado final. A
+troca atomica por `rename` evita um arquivo meio-escrito se o processo cair durante
+a reescrita.
 
 ## 6. Erros, decisoes fracas ou correcoes
 
@@ -309,6 +376,19 @@ adicionou um teste de caracterizacao para travar esse comportamento.
 O help do `--aof` dizia "Accepted for future AOF support" mesmo com o AOF ligado
 logo abaixo (replay no boot e decorator duravel). A correcao alinhou o texto ao
 comportamento real.
+
+O EXPIRE duravel tinha uma divergencia silenciosa: a execucao viva chamava
+`store.expire(key, ttl)` (TTL relativo, float, relogio do store) enquanto o
+registro persistia `EXPIREAT` absoluto truncado no relogio do decorator. O `.ceil`
+do `TTL` mascarava a diferenca na maioria das consultas, mas em uma consulta dentro
+da janela de truncamento o estado vivo via a chave viva e o estado reconstruido via
+a chave expirada. A correcao fez o decorator resolver o registro uma vez e a
+execucao viva aplicar esse mesmo registro, e persistir o instante em precisao cheia.
+
+A correcao introduziu, de proposito, uma duplicacao temporaria: `apply_durable` no
+executor e `apply_record` na infraestrutura faziam o mesmo mapeamento. O commit
+seguinte removeu `apply_record` e fez o replay aplicar pelo mesmo `apply_durable`,
+por injecao do aplicador, eliminando o risco de drift.
 
 ## 7. Como o TDD foi usado
 
@@ -423,10 +503,34 @@ atual; existe para impedir que uma futura limpeza do `delete` remova a expiracao
 preguicosa sem ser notada.
 Green: `Store#delete` ficou explicito sem mudar o comportamento observavel.
 
+Red: `test_durable_expire_replays_to_the_exact_live_instant` faz `EXPIRE` num
+relogio fracionario (`base + 0.7`), replica e consulta em `base + 60.3`, dentro da
+janela onde o estado vivo (expira em `60.7`) e o reconstruido (expirava em `60.0`)
+discordam. No codigo antigo o vivo respondia `"abc"` e o replay respondia `nil`.
+Green: o decorator passou a aplicar o registro resolvido via `apply_durable` e o
+`EXPIREAT` passou a precisao cheia, entao os dois lados aplicam o mesmo instante.
+
+Red: `test_fsyncs_after_append_when_enabled` instancia `AofLog.new(path:, fsync: true)`
+e quebra com keyword desconhecida; o par `test_flushes_without_fsync_by_default`
+fixa o default (flush sem fsync). Ambos usam um stub artesanal de `File.open`,
+porque o minitest 6 que o `autorun` carrega nao traz mais `minitest/mock`.
+Green: `AofLog` ganhou o parametro `fsync:` e o `file.fsync if @fsync`.
+
+Red: `test_info_reports_keyspace_summary` espera um bulk `keys:2\nkeys_with_expiry:1`
+e falha com `:error` porque `INFO` ainda era comando desconhecido.
+Green: `INFO` entrou no `CommandRegistry`, `Store#keyspace_summary` passou a contar
+chaves vivas e `CommandExecutor#execute_info` formatou os gauges.
+
+Red: `test_compact_rewrites_aof_to_minimal_replayable_state` faz seis comandos
+duraveis redundantes, chama `compact` (inexistente) e verifica arquivo menor e
+replay identico ao estado vivo.
+Green: `Store#snapshot`, `AofLog#rewrite` (arquivo temporario + `rename` atomico) e
+`AofCommandExecutor#compact` reescreveram o log a partir do estado minimo.
+
 ## 8. Quais testes protegem quais decisoes
 
-`test/unit/command_executor_test.rb` protege comando, aridade, TTL e que `DEL`
-em chave expirada reporta 0.
+`test/unit/command_executor_test.rb` protege comando, aridade, TTL, que `DEL`
+em chave expirada reporta 0 e que `INFO` reporta gauges de keyspace.
 
 `test/unit/command_registry_test.rb` protege o contrato compartilhado entre
 executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
@@ -443,8 +547,10 @@ cliente. Tambem protege shutdown de clientes ociosos.
 
 `test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
 mutacao, ignorar frame parcial, rejeitar frame com bytes extras, manter contrato
-entre comandos duraveis e replay e serializar o registro duravel com a mutacao do
-store sob escrita concorrente.
+entre comandos duraveis e replay, serializar o registro duravel com a mutacao do
+store sob escrita concorrente, o determinismo de EXPIRE entre vivo e replay, o
+`fsync` opcional e a compaction que reescreve o log para o estado minimo
+replayavel.
 
 ## 9. Timeline dos commits atomicos
 
@@ -486,6 +592,12 @@ store sob escrita concorrente.
 | `002520f` | Formatter textual carregava heuristica morta | Remocao do fallback inalcancavel; formatter so trata `Response` ou `nil` | `bin/test`, `bin/check` |
 | `b7789b4` | `delete` escondia expiracao preguicosa load-bearing | Intencao explicita no delete e teste de `DEL` em chave expirada | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
 | `815ff40` | Help do `--aof` dizia "future support" para recurso ativo | Texto de CLI alinhado ao comportamento real | `ruby -c bin/rediscraft`, `bin/test`, `bin/check` |
+| `4486faa` | Toolchain pinada em Ruby 3.4.2 | Bump para 3.4.9 em `.ruby-version` e `.tool-versions` | `bin/check` |
+| `4b8c75d` | EXPIRE vivo divergia do replay (relogio duplo e truncagem) | Execucao viva aplica o registro persistido em precisao cheia | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `5f94b73` | `apply_durable` e `apply_record` duplicavam o mapeamento | Replay aplica pelo mesmo `apply_durable` via aplicador injetado | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `d5a748d` | AOF so dava flush, sem garantia em disco | `fsync` opcional por append e flag `--fsync` | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `30a9a92` | Faltava qualquer observabilidade | Comando `INFO` com gauges de keyspace | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
+| `19ecdf2` | AOF crescia sem limite | Compaction reescreve o log do estado vivo via `rename` atomico | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -503,18 +615,29 @@ store sob escrita concorrente.
 - Shutdown de interface externa deve liberar sockets e threads que ela abriu.
 - Nova operacao duravel deve gravar o registro e aplicar a mutacao sob o mesmo
   mutex de escrita, para que a ordem do log seja a ordem de aplicacao.
+- Execucao viva e replay de um comando duravel devem passar pelo mesmo aplicador
+  (`apply_durable`), para que estado vivo e estado reconstruido nunca divirjam.
+- Comando duravel novo precisa ser reconstruivel a partir do `snapshot`, senao a
+  compaction perde a chave ao reescrever o log.
+- Observabilidade comeca por gauge derivado do estado; um contador de requests so
+  entra quando existir um objeto de metricas que justifique acoplar o dispatch.
 - Teste unitario vem antes de adapter externo.
 
 ## 11. Como adicionar a proxima feature
 
-Para adicionar `INFO`, primeiro defina quais contadores importam. Depois crie
-um teste de aplicacao para `INFO`, adicione o estado minimo necessario, exponha
-pelo protocolo e registre no journal qual custo de observabilidade foi aceito.
+`INFO` ja existe, mas so com gauges de keyspace. O proximo passo natural de
+observabilidade e um contador de comandos: primeiro crie um objeto de metricas com
+incremento thread-safe, decida onde incrementar uma unica vez por comando (o ponto
+de dispatch da interface, nao o `apply_durable` que tambem roda no replay), injete
+esse objeto no executor e no servidor, e so entao adicione o campo no `INFO`. O
+journal deve registrar por que o gauge veio antes do contador.
 
 ## 12. Limites de producao deixados fora
 
-Sem auth, TLS, ACL, RESP completo, snapshots, AOF compaction, fsync configuravel,
-replicacao, clustering, limite de conexoes, metricas e backpressure.
+Sem auth, TLS, ACL, RESP completo, snapshots binarios, replicacao, clustering,
+limite de conexoes, metricas completas (Prometheus/tracing) e auto-compaction por
+razao de crescimento. Ja existem, em forma de estudo: `fsync` opcional, compaction
+manual e `INFO` por gauges.
 
 ## 13. Resultado das revisoes de qualidade
 
@@ -566,6 +689,15 @@ rodada era de durabilidade sob concorrencia, nao de throughput; os riscos
 residuais conhecidos continuam intencionais (sem auth, TLS, limite de conexoes,
 backpressure, `fsync` configuravel, snapshots, replicacao ou benchmarks de
 contencao).
+
+Rodada de evolucao dirigida (nao mais so revisao): subiu o Ruby para 3.4.9 e
+implementou quatro itens antes documentados como fora de escopo. EXPIRE virou
+deterministico entre execucao e replay; `fsync` ficou configuravel; `INFO` passou
+a expor gauges de keyspace; e a compaction passou a reescrever o AOF a partir do
+estado vivo. Evidencia: `bin/test` e `bin/check` verdes com 44 testes e 108
+assertions. A secao 15 detalha cada decisao em nivel de especialista. Os riscos
+residuais que continuam fora: auth, TLS, RESP completo, replicacao, clustering,
+limite de conexoes, metricas completas e auto-compaction.
 
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
@@ -670,3 +802,118 @@ ja faz replay no boot e embrulha o executor com o decorator duravel quando a fla
 e passada. Texto de help e saida operacional: prometer "future" para um recurso
 ativo desinforma quem opera o servidor. A correcao alinhou o texto ao
 comportamento real.
+
+## 15. Nota tecnica detalhada: rodada de durabilidade e observabilidade
+
+Esta secao explica, como um especialista em Ruby explicaria a um colega, o que
+mudou em cada item desta rodada e as nuances que pesaram em cada decisao.
+
+### 15.1 Ruby 3.4.9
+
+A toolchain estava pinada em 3.4.2 (`.ruby-version` e `.tool-versions`). Subir para
+3.4.9 e um bump de patch dentro do mesmo minor: ganha correcoes sem risco de
+mudanca de linguagem. Mantive o CI em `ruby-version: "3.4"`, que ja resolve para o
+patch mais novo, e nao saltei para 4.0 de proposito: 4.0 nao esta no asdf da
+maquina e um salto de major pediria validar mudancas de comportamento antes. A
+licao operacional: o pin exato vive no projeto; o CI pode flutuar no minor.
+
+### 15.2 EXPIRE deterministico entre execucao e replay
+
+Este foi o item com mais nuance, entao vale o detalhe.
+
+O problema. O AOF persiste mutacoes para que o replay reconstrua o estado. Para
+SET e DEL isso e trivial: o registro e o proprio comando. EXPIRE e diferente
+porque carrega tempo. A execucao viva chamava `store.expire(key, ttl)`, que
+calcula `now + ttl` com o relogio do `Store` e guarda um `Time` em precisao de
+ponto flutuante. O registro duravel, porem, era `EXPIREAT (clock.call + ttl).to_i`,
+calculado com o relogio do `AofCommandExecutor` e truncado para segundo inteiro.
+Tres fontes de divergencia: dois relogios distintos, dois instantes de leitura, e
+duas precisoes (float vivo contra inteiro persistido).
+
+Por que quase nunca aparecia. `Store#ttl` faz `(expires_at - now).ceil`. O `ceil`
+costuma reabsorver a diferenca de fracao de segundo, entao a consulta de TTL
+devolvia o mesmo numero nos dois lados. O bug so fica observavel quando a consulta
+cai dentro da janela entre os dois instantes. O teste arma exatamente isso: EXPIRE
+em `base + 0.7`, com vida de 60s; o vivo expira em `60.7`, o registro trunca para
+`60.0`; consultando em `base + 60.3`, o vivo ainda ve a chave e o replay ja a
+expirou.
+
+A correcao. O caminho duravel agora resolve o registro uma unica vez no decorator
+e a execucao viva aplica esse mesmo registro, via `apply_durable`. Como o registro
+e o mesmo objeto-string que sera relido no replay, os dois lados aplicam o instante
+identico. E persisti o instante em precisao cheia (`to_f`, ex.: `1767268860.0`) em
+vez de truncar para o segundo. A alternativa de truncar o vivo tambem casaria os
+lados, mas fazendo a chave morrer antes do combinado; preferi nao degradar a
+precisao viva para acomodar um formato de log lossy.
+
+Por que aplicar o registro em vez de reexecutar o comando. Reexecutar `EXPIRE`
+relativo no inner reintroduziria a segunda leitura de relogio. Aplicar o
+`EXPIREAT` ja resolvido garante uma leitura so. `EXPIREAT` continua sem ser comando
+publico: ele so existe como registro interno, aplicado por `apply_durable`, que o
+cliente nunca alcanca pelo `execute`.
+
+Unificacao com o replay. A primeira versao da correcao deixou `apply_durable` no
+executor e `apply_record` na infraestrutura fazendo o mesmo mapeamento, uma
+duplicacao que o projeto combate desde o `CommandRegistry`. O commit seguinte fez
+o replay receber um aplicador injetado e aplicar pelo mesmo `apply_durable`. Agora
+"live == replay" nao e um cuidado de codificacao, e o mesmo metodo. A infra
+continua folha: o `AofLog` so chama `applicator.apply_durable(record)`, sem
+conhecer a classe concreta.
+
+### 15.3 fsync configuravel
+
+`file.flush` move o buffer do Ruby para o kernel, mas os bytes ainda podem viver na
+page cache do SO; uma queda de energia os perde. `file.fsync` forca a descida para
+o disco. Sao garantias diferentes, com custos diferentes: `fsync` por append torna
+cada escrita uma operacao sincrona de disco. Por isso a opcao entra desligada por
+padrao, preservando o comportamento e o throughput atuais, e fica como decisao
+explicita do operador via `--fsync`.
+
+Nota de teste. O minitest 6 que o `autorun` carrega nesta maquina nao traz mais
+`minitest/mock`, entao o `File.stub` nao existe. Como o projeto nunca dependeu de
+gem de mock, escrevi um stub artesanal que troca `File.open` por um arquivo-espiao
+durante o bloco e restaura depois. E mais codigo que um mock pronto, mas mantem a
+suite sem dependencias novas e ensina que stub e so substituicao temporaria de
+metodo com restauracao garantida no `ensure`.
+
+### 15.4 INFO por gauges, e por que nao um contador ainda
+
+`INFO` expoe `keys` e `keys_with_expiry`, lidos do estado vivo do store em uma
+unica passada sob o mutex, excluindo chaves logicamente expiradas. Sao gauges:
+fotos do estado, sem historia.
+
+A decisao interessante e o que ficou de fora. O contador classico de observabilidade
+e "comandos processados". Ele parece simples, mas nao tem um lar limpo neste
+desenho. No modo sem AOF, todo comando passa por `CommandExecutor#execute`. No modo
+com AOF, os comandos duraveis passam por `apply_durable` (nao por `execute`), e o
+mesmo `apply_durable` roda no replay. Contar dentro do executor ou contaria duas
+vezes, ou contaria o replay como se fosse trafego de cliente. O lugar correto e o
+ponto de dispatch da interface, que so ve comandos de cliente, com um objeto de
+metricas compartilhado que o `INFO` leria. Como isso acopla executor e servidor por
+um objeto novo, adiei: gauge agora, contador quando o objeto de metricas se
+justificar. O journal registra essa ausencia como escolha, nao esquecimento.
+
+### 15.5 Compaction a partir do estado vivo
+
+O AOF e um log de append: ele cresce a cada comando duravel, inclusive os que se
+anulam (cem SET na mesma chave, ou SET seguido de DEL). Compaction reescreve o log
+no menor conjunto de registros que reconstroi o estado atual.
+
+O algoritmo. `Store#snapshot` devolve as entradas vivas com valor e expiracao.
+`AofCommandExecutor#compact` mapeia cada entrada para os registros minimos: sempre
+um `SET`, e um `EXPIREAT` se houver expiracao. E o inverso exato de `apply_durable`,
+entao o arquivo compactado replica para o mesmo estado.
+
+Atomicidade em duas dimensoes. Primeiro contra concorrencia: a compaction segura o
+mesmo `@write_mutex` das escritas, entao o snapshot e a reescrita formam um ponto
+unico em que nenhuma escrita duravel se intromete; sem isso, um SET entre o snapshot
+e o `rename` sumiria. Segundo contra falha de processo: `AofLog#rewrite` escreve um
+arquivo `.tmp` e troca por `File.rename`, que e atomico no mesmo filesystem. Se o
+processo cair no meio da escrita, o `@path` original continua intacto; nunca existe
+um AOF meio-reescrito.
+
+O custo honesto. Compaction e lossy por design: a historia de mutacoes desaparece,
+fica so o estado final. Por isso o trigger atual e explicito (`--compact-on-start`,
+depois do replay) e nao automatico; auto-compaction por razao de crescimento pediria
+uma thread de fundo e contabilidade de tamanho, que ficam para quando a licao basica
+de "reescrever o estado minimo" ja estiver firme.
