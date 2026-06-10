@@ -19,7 +19,7 @@ module Rediscraft
         end
       end
 
-      def replay(store)
+      def replay(applicator)
         return unless File.exist?(@path)
 
         File.open(@path, "rb") do |file|
@@ -27,29 +27,12 @@ module Rediscraft
             parts = decode(payload)
             next if parts.nil?
 
-            apply_record(store, parts)
+            applicator.apply_durable(parts)
           end
         end
       end
 
       private
-
-      def apply_record(store, parts)
-        command = parts.first&.upcase
-
-        case command
-        when "SET"
-          store.set(parts[1], parts[2]) if parts.length == 3
-        when "DEL"
-          store.delete(parts[1]) if parts.length == 2
-        when "EXPIREAT"
-          store.expire_at(parts[1], Time.at(Float(parts[2])).utc) if parts.length == 3
-        when "PERSIST"
-          store.persist(parts[1]) if parts.length == 2
-        end
-      rescue ArgumentError
-        nil
-      end
 
       def encode(parts)
         encoded_parts = parts.map do |part|

@@ -54,7 +54,7 @@ class AofCommandExecutorTest < Minitest::Test
       executor.execute(["EXPIRE", "session", "60"])
 
       replayed = Rediscraft::Domain::Store.new(clock: clock)
-      aof.replay(replayed)
+      aof.replay(Rediscraft::Application::CommandExecutor.new(store: replayed))
 
       now = base + 60.3
 
@@ -72,7 +72,7 @@ class AofCommandExecutorTest < Minitest::Test
       store = Rediscraft::Domain::Store.new(clock: -> { now })
       aof = Rediscraft::Infrastructure::AofLog.new(path: path)
 
-      aof.replay(store)
+      aof.replay(Rediscraft::Application::CommandExecutor.new(store: store))
 
       assert_equal "Ada", store.get("name")
       assert_equal 60, store.ttl("name")
@@ -106,7 +106,7 @@ class AofCommandExecutorTest < Minitest::Test
       executor.execute(["PERSIST", "persistent"])
 
       replayed_store = Rediscraft::Domain::Store.new(clock: -> { now })
-      aof.replay(replayed_store)
+      aof.replay(Rediscraft::Application::CommandExecutor.new(store: replayed_store))
 
       assert_equal "Ada", replayed_store.get("name")
       assert_nil replayed_store.get("stale")
@@ -128,7 +128,7 @@ class AofCommandExecutorTest < Minitest::Test
       executor.execute(["SET", "message", " leading\nand trailing "])
 
       replayed_store = Rediscraft::Domain::Store.new
-      aof.replay(replayed_store)
+      aof.replay(Rediscraft::Application::CommandExecutor.new(store: replayed_store))
 
       assert_equal " leading\nand trailing ", replayed_store.get("message")
     end
@@ -143,7 +143,7 @@ class AofCommandExecutorTest < Minitest::Test
       store = Rediscraft::Domain::Store.new
       aof = Rediscraft::Infrastructure::AofLog.new(path: path)
 
-      aof.replay(store)
+      aof.replay(Rediscraft::Application::CommandExecutor.new(store: store))
 
       assert_nil store.get("name")
     end
