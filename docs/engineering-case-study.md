@@ -45,9 +45,9 @@ is applied, so append failure prevents the store from changing.
 
 ## 7. Failure Scenarios
 
-Partial trailing AOF frames are ignored. Client disconnects are isolated to the
-client thread. Finished client threads are removed from tracking. Expired
-entries are removed lazily.
+Partial trailing AOF frames are ignored. Client disconnects close only that
+connection in the event loop, and closed connections are removed from tracking.
+Expired entries are removed lazily.
 
 ## 8. Performance Strategy
 
@@ -56,9 +56,10 @@ the command set and durability behavior are stable.
 
 ## 9. Scalability Strategy
 
-The current server is single process and thread-per-client. Future scale work
-would measure lock contention, then consider sharded maps or a single owner
-event loop.
+The current server is a single process running a single-threaded event loop
+(`IO.select` with non-blocking sockets), the same model Redis uses. Future scale
+work would measure per-command cost, then consider sharded maps or multiple event
+loops before reintroducing threads.
 
 ## 10. Security Model
 

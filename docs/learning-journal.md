@@ -103,6 +103,19 @@ expondo gauges de keyspace, a primeira fatia de observabilidade. Por fim,
 compaction do AOF reescrevendo o log a partir do estado vivo, encerrando o
 crescimento ilimitado.
 
+A rodada seguinte foi a maior mudanca de direcao do projeto: trocar
+thread-por-cliente por um event loop single-threaded. O servidor antigo dava uma
+thread por conexao e bloqueava em `read_request(io)`. O novo `TcpServer` e um
+reactor: uma thread roda `IO.select` sobre o listener, um self-pipe de shutdown e
+todos os sockets de cliente, com leitura e escrita nao bloqueantes e um buffer por
+conexao. Para isso, o contrato de protocolo deixou de ser `read_request(io)`
+(pull, bloqueante) e virou `consume(buffer)` (push, incremental): devolve
+`[parts, rest]` para um frame completo, `nil` quando faltam bytes, e levanta
+`ProtocolError` em frame malformado. Foi feito em tres commits: primeiro o parsing
+incremental nos protocolos (aditivo), depois a reescrita do servidor, depois a
+remocao do `read_request` morto. Os locks das camadas internas ficaram de
+proposito: a mudanca de concorrencia mora so na interface.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -223,6 +236,34 @@ formato de snapshot separado. A alternativa rejeitada foi auto-compactar por raz
 de crescimento em background; isso exigiria uma thread e contabilidade de tamanho
 antes de a licao de "reescrever o estado minimo" estar clara.
 
+Event loop single-threaded em vez de thread-por-cliente: escolhido porque e o
+modelo que servidores de cache reais usam e porque ensina IO multiplexado de
+verdade. As alternativas rejeitadas foram pool de threads (ainda bloqueia um
+worker por cliente lento e adiciona uma fila antes da licao do reactor) e uma
+lib async/nio4r (formato de producao, mas a gem esconderia a mecanica do
+`IO.select` que o projeto quer ensinar). Thread-por-cliente nao foi apagado da
+historia: o journal e os ADRs preservam por que ele existiu e por que saiu.
+
+Contrato de protocolo incremental (`consume(buffer)`) em vez de bloqueante
+(`read_request(io)`): escolhido porque um reactor recebe bytes parciais e nao pode
+bloquear esperando um frame inteiro. A alternativa rejeitada foi manter
+`read_request` como adaptador sobre `consume`; isso deixaria duas portas de
+entrada e um caminho bloqueante morto. Consequencia semantica: um frame
+incompleto agora e "preciso de mais bytes" (`nil`), nao um erro; so frame
+malformado levanta `ProtocolError`.
+
+Manter os mutexes das camadas internas mesmo com o servidor single-threaded:
+escolhido porque a concorrencia e uma decisao da interface, nao do dominio nem da
+aplicacao. A alternativa rejeitada foi remover os locks "ja que so ha uma thread";
+isso acoplaria as camadas internas ao modelo do servidor e as quebraria se um
+driver multi-thread voltasse. Com o event loop os locks ficam sem contencao, nao
+errados.
+
+Self-pipe para shutdown: escolhido porque `IO.select` bloqueia e precisa de algo
+no conjunto de leitura para acordar quando `stop` vem de outra thread ou de um
+sinal. A alternativa rejeitada foi um timeout curto no `select` em loop; isso
+acordaria a toa muitas vezes por segundo so para checar uma flag.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
@@ -285,6 +326,16 @@ Compaction encerra o crescimento do AOF e o arquivo novo reconstroi o mesmo esta
 mas e lossy por design: a historia de mutacoes some, ficando so o estado final. A
 troca atomica por `rename` evita um arquivo meio-escrito se o processo cair durante
 a reescrita.
+
+Event loop single-threaded multiplexa muitos clientes em uma thread e nao cresce
+threads com conexoes, mas exige parsing incremental, buffers de escrita e um
+self-pipe de shutdown, e um comando CPU-bound trava o loop inteiro. Esse e o mesmo
+trade do Redis: simplicidade de "uma coisa de cada vez" em troca de nao paralelizar
+comandos.
+
+Parsing incremental e binario-safe e robusto a fragmentacao TCP, mas e mais
+codigo que o parser bloqueante: precisa de scanners que devolvem "incompleto" sem
+consumir, em vez de simplesmente bloquear no socket ate o frame chegar.
 
 ## 6. Erros, decisoes fracas ou correcoes
 
@@ -389,6 +440,23 @@ A correcao introduziu, de proposito, uma duplicacao temporaria: `apply_durable` 
 executor e `apply_record` na infraestrutura faziam o mesmo mapeamento. O commit
 seguinte removeu `apply_record` e fez o replay aplicar pelo mesmo `apply_durable`,
 por injecao do aplicador, eliminando o risco de drift.
+
+O contrato de protocolo `read_request(io)` assumia um IO bloqueante de onde dava
+para puxar um frame inteiro. Isso e incompativel com um event loop, que recebe
+bytes parciais. O contrato virou `consume(buffer)`, que parseia o que tem e
+devolve "incompleto" sem consumir quando faltam bytes. Um efeito colateral
+correto: no modelo antigo, fim de stream no meio de um bulk era erro; no modelo
+incremental, isso e so "preciso de mais bytes", e o teste antigo que esperava erro
+para bulk incompleto deu lugar a um teste que distingue incompleto (`nil`) de
+malformado (terminador errado levanta `ProtocolError`).
+
+O `TcpServer` de thread-por-cliente foi reescrito como reactor. O cleanup de
+threads finalizadas, o gate de inicio de thread e o tracking `thread => socket`
+das rodadas anteriores deixaram de existir porque nao ha mais threads de cliente.
+Esses ajustes nao foram "perdidos": eles foram corretos para o modelo de threads e
+o journal os preserva como historia. Dois testes de integracao que citavam threads
+no nome foram renomeados para falar de conexoes, e um teste novo exercita um
+comando que chega em dois segmentos TCP, provando o buffer por conexao.
 
 ## 7. Como o TDD foi usado
 
@@ -527,6 +595,27 @@ replay identico ao estado vivo.
 Green: `Store#snapshot`, `AofLog#rewrite` (arquivo temporario + `rename` atomico) e
 `AofCommandExecutor#compact` reescreveram o log a partir do estado minimo.
 
+Red: os testes de `consume` foram escritos antes da reescrita do servidor:
+`consume` devolvendo `[parts, rest]` para frame completo, `nil` para frame parcial,
+preservando os bytes do proximo frame, e levantando `ProtocolError` para null bulk.
+Eles falhavam porque `consume` ainda nao existia.
+Green: `TextProtocol#consume` (linha terminada em `\n`) e `Resp2Protocol#consume`
+(scanners cursor-based que devolvem incompleto sem consumir) passaram, ao lado dos
+`read_request` antigos. Esse passo foi aditivo de proposito, para manter a suite
+verde antes de trocar o servidor.
+
+Green sem red explicito: a reescrita do `TcpServer` para event loop foi guiada
+pelos testes de integracao ja existentes. Eles dirigem sockets TCP reais e nao
+conhecem o modelo interno, entao passaram contra o reactor sem mudanca, provando que
+o comportamento observavel foi preservado. O unico ajuste foi renomear dois testes
+que citavam threads e adicionar um teste de comando fragmentado em dois segmentos.
+
+Red: ao remover `read_request`, o `resp2_protocol_test` foi reescrito para o
+contrato `consume`, incluindo um teste novo que separa frame incompleto (`nil`) de
+frame malformado (terminador de bulk errado levanta `ProtocolError`).
+Green: `read_request` e os scanners StringIO sairam; o servidor e a suite passaram a
+depender so de `consume`.
+
 ## 8. Quais testes protegem quais decisoes
 
 `test/unit/command_executor_test.rb` protege comando, aridade, TTL, que `DEL`
@@ -536,14 +625,18 @@ em chave expirada reporta 0 e que `INFO` reporta gauges de keyspace.
 executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
 `EXPIRE` para `EXPIREAT`, alem do parsing de inteiro nao negativo.
 
-`test/unit/text_protocol_test.rb` protege parsing e tipo de resposta.
+`test/unit/text_protocol_test.rb` protege parsing, tipo de resposta e o `consume`
+incremental por linha (frame completo, rest e frame ainda incompleto).
 
-`test/unit/resp2_protocol_test.rb` protege parser e formatter RESP2, incluindo a
-diferenca entre EOF normal, null bulk invalido em comando e erro de protocolo.
+`test/unit/resp2_protocol_test.rb` protege o parser incremental e o formatter
+RESP2: frame completo com rest, frame parcial como `nil`, bytes do proximo frame
+preservados, null bulk em comando e terminador de bulk malformado como
+`ProtocolError`.
 
 `test/integration/tcp_server_test.rb` protege conexao TCP real e clientes
-concorrentes, incluindo comando RESP2 real e erro RESP malformado visivel ao
-cliente. Tambem protege shutdown de clientes ociosos.
+concorrentes no event loop, incluindo comando RESP2 real, erro RESP malformado
+visivel ao cliente, comando fragmentado em dois segmentos TCP, remocao de conexoes
+fechadas do tracking e shutdown que fecha clientes ociosos sem bloquear.
 
 `test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
 mutacao, ignorar frame parcial, rejeitar frame com bytes extras, manter contrato
@@ -598,6 +691,9 @@ replayavel.
 | `d5a748d` | AOF so dava flush, sem garantia em disco | `fsync` opcional por append e flag `--fsync` | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
 | `30a9a92` | Faltava qualquer observabilidade | Comando `INFO` com gauges de keyspace | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
 | `19ecdf2` | AOF crescia sem limite | Compaction reescreve o log do estado vivo via `rename` atomico | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `38441c6` | Protocolos so liam por IO bloqueante | `consume(buffer)` incremental em texto e RESP2 | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
+| `a94fb31` | Thread-por-cliente nao ensina multiplexacao | `TcpServer` virou reactor single-threaded com `IO.select` e self-pipe | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
+| `6eb7867` | `read_request` bloqueante ficou morto | Removido o pull bloqueante; servidor e suite usam so `consume` | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -605,11 +701,14 @@ replayavel.
 - Validacao de comando entra em `Application::CommandExecutor`.
 - Persistencia entra em `Infrastructure`.
 - Parsing e formato de resposta entram em `Interface`.
-- Novo protocolo deve implementar `read_request(io)` e `format(response)` sem
+- Novo protocolo deve implementar `consume(buffer)` e `format(response)` sem
   mudar dominio ou aplicacao.
 - Novo comando publico deve entrar em `CommandRegistry` antes de executor,
   protocolo ou AOF.
-- Novo parser de protocolo deve diferenciar EOF normal de erro de framing.
+- Novo parser de protocolo deve diferenciar frame incompleto (`nil`, espera mais
+  bytes) de frame malformado (`ProtocolError`).
+- O modelo de concorrencia vive so na interface; dominio e aplicacao nao devem
+  assumir quantas threads dirigem o servidor.
 - Novo comando duravel deve atualizar o teste de contrato entre registry, AOF e
   replay.
 - Shutdown de interface externa deve liberar sockets e threads que ela abriu.
@@ -635,9 +734,11 @@ journal deve registrar por que o gauge veio antes do contador.
 ## 12. Limites de producao deixados fora
 
 Sem auth, TLS, ACL, RESP completo, snapshots binarios, replicacao, clustering,
-limite de conexoes, metricas completas (Prometheus/tracing) e auto-compaction por
-razao de crescimento. Ja existem, em forma de estudo: `fsync` opcional, compaction
-manual e `INFO` por gauges.
+limite de conexoes, metricas completas (Prometheus/tracing), auto-compaction por
+razao de crescimento e paralelismo de comandos (o event loop e single-threaded,
+como o Redis classico: um comando CPU-bound trava o loop). Ja existem, em forma de
+estudo: event loop com `IO.select`, `fsync` opcional, compaction manual e `INFO`
+por gauges.
 
 ## 13. Resultado das revisoes de qualidade
 
@@ -698,6 +799,16 @@ estado vivo. Evidencia: `bin/test` e `bin/check` verdes com 44 testes e 108
 assertions. A secao 15 detalha cada decisao em nivel de especialista. Os riscos
 residuais que continuam fora: auth, TLS, RESP completo, replicacao, clustering,
 limite de conexoes, metricas completas e auto-compaction.
+
+Rodada de mudanca de direcao arquitetural: trocar thread-por-cliente por um event
+loop single-threaded. Tres commits de codigo (parsing incremental aditivo,
+reescrita do `TcpServer` como reactor, remocao do `read_request` morto) mais ADR
+0004 e docs. O contrato de protocolo virou `consume(buffer)` incremental. Os locks
+internos ficaram de proposito, porque a concorrencia e uma decisao da interface.
+Evidencia: `bin/test` e `bin/check` verdes com 49 testes e 116 assertions, e um
+smoke test do processo real (texto e AOF). A secao 16 ensina a transicao em
+detalhe. Risco residual assumido: um comando CPU-bound trava o loop, o mesmo trade
+do Redis classico.
 
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
@@ -917,3 +1028,157 @@ fica so o estado final. Por isso o trigger atual e explicito (`--compact-on-star
 depois do replay) e nao automatico; auto-compaction por razao de crescimento pediria
 uma thread de fundo e contabilidade de tamanho, que ficam para quando a licao basica
 de "reescrever o estado minimo" ja estiver firme.
+
+## 16. Nota tecnica detalhada: de thread-por-cliente para event loop
+
+Esta secao ensina a maior mudanca de direcao do projeto. Ela e longa de proposito:
+o objetivo nao e so dizer o que mudou, mas mostrar por que cada peca do reactor
+existe e o que ela substituiu. Trate como um especialista explicando a um colega
+por que vale trocar o modelo que ja funcionava.
+
+### 16.1 Por que sair do thread-por-cliente
+
+O servidor antigo era o modelo mais facil de ler: para cada conexao aceita, uma
+`Thread.new` rodava `handle_client`, que ficava em loop chamando
+`protocol.read_request(io)`. Esse `read_request` fazia `io.gets`/`io.read`
+bloqueantes: a thread parava ali ate o cliente mandar um frame inteiro.
+
+Esse modelo ensina pouco sobre como servidores de cache reais funcionam e tem tres
+custos concretos. Primeiro, escala threads com conexoes: mil clientes ociosos sao
+mil threads paradas, cada uma com sua pilha. Segundo, um cliente lento prende uma
+thread inteira bloqueada na leitura. Terceiro, e justamente o que o Redis nao faz:
+o Redis e single-threaded num event loop, e parte do valor didatico do projeto e
+chegar nesse modelo de proposito, depois de o aluno ja ter visto a versao com
+threads e sentido seus limites.
+
+A decisao de trocar nao apaga a versao com threads. O ADR 0004 e este journal
+preservam por que ela existiu. O ponto pedagogico do repositorio nunca foi "a
+arquitetura certa desde o inicio", e sim "como o desenho evolui quando voce o
+empurra para mais perto do real".
+
+### 16.2 O reactor, peca por peca
+
+O novo `TcpServer` e um reactor: uma unica thread roda um loop em volta de
+`IO.select`. Cada iteracao monta tres conjuntos e bloqueia ate algo ficar pronto.
+
+O conjunto de leitura tem o socket listener, um self-pipe de shutdown e todos os
+sockets de cliente. Se o listener fica pronto, ha uma conexao nova para aceitar. Se
+um socket de cliente fica pronto, ha bytes para ler. Se o self-pipe fica pronto, e
+hora de desligar.
+
+O conjunto de escrita tem so os sockets que ainda tem bytes pendentes no seu buffer
+de escrita. Isso e importante: nao adianta perguntar ao `select` "esse socket pode
+escrever?" se nao ha nada para mandar; so registramos para escrita quem tem backlog.
+
+Sockets sao nao bloqueantes. `accept_nonblock`, `read_nonblock` e `write_nonblock`
+nunca param a thread: se nao ha o que fazer agora, levantam `IO::WaitReadable` ou
+`IO::WaitWritable`, que o reactor trata como "volta no proximo `select`". Uma unica
+thread, portanto, atende todos os clientes intercalando pedacos de trabalho.
+
+### 16.3 Buffers por conexao, porque TCP nao tem frames
+
+A consequencia mais importante de largar a leitura bloqueante e que o protocolo
+nao pode mais assumir que um `read` traz um comando inteiro. TCP e um stream de
+bytes sem fronteiras: um `SET` pode chegar em dois segmentos (`"SET na"` e depois
+`"me Ada\n"`), e dois comandos podem chegar grudados num segmento so.
+
+Por isso cada `Connection` carrega um `read_buffer`. Ao ler, o reactor anexa os
+bytes novos ao buffer e tenta extrair quantos frames completos houver, em loop. A
+extracao e o novo contrato de protocolo: `consume(buffer)`. Ele devolve
+`[parts, rest]` quando ha um frame completo (e `rest` sao os bytes que sobraram,
+que voltam para o buffer), `nil` quando ainda faltam bytes, e levanta
+`ProtocolError` quando o frame esta malformado.
+
+Essa e a diferenca semantica que merece atencao. No modelo bloqueante, ficar sem
+bytes no meio de um bulk era erro, porque a unica forma de "faltar byte" era o
+stream acabar. No modelo incremental, faltar byte e o caso normal: e so esperar o
+proximo `read`. Entao "incompleto" virou `nil`, e so a corrupcao real (prefixo
+desconhecido, terminador de bulk errado, null bulk dentro de um comando) levanta
+`ProtocolError`. O teste antigo que esperava erro para bulk incompleto deu lugar a
+um teste que separa explicitamente os dois casos.
+
+O parser RESP incremental usa scanners cursor-based: `scan_value`, `scan_array`,
+`scan_bulk`, `scan_line`. Cada um recebe `(buffer, cursor)` e devolve
+`[valor, proximo_cursor]` ou um sentinela `INCOMPLETE`. Um array so e completo se
+todos os seus elementos forem completos; se qualquer elemento faltar bytes, o array
+inteiro volta `INCOMPLETE` e nada e consumido. Reparsear do inicio a cada chegada de
+bytes e O(tamanho do frame), aceitavel para estudo e bem mais simples que uma
+maquina de estados que retoma de onde parou.
+
+### 16.4 Escrita tambem pode bloquear
+
+Simetricamente, `write_nonblock` pode escrever so parte do buffer quando o buffer de
+socket do SO esta cheio, levantando `IO::WaitWritable`. Por isso cada conexao tem um
+`write_buffer`: o reactor enfileira a resposta, tenta esvaziar o que der agora, e o
+que sobrar fica para a proxima vez que o `select` disser que aquele socket aceita
+escrita. Sem esse cuidado, um cliente que nao le rapido faria a escrita do servidor
+falhar ou bloquear.
+
+`QUIT` e erro de protocolo usam um campo `close_after_flush`: a resposta (o `+OK` do
+QUIT, ou o `-ERR protocol error`) e enfileirada, e a conexao so e fechada depois que
+o buffer de escrita esvazia. Fechar antes perderia a ultima resposta.
+
+### 16.5 Shutdown com self-pipe
+
+`IO.select` bloqueia. Como acordar o loop quando `stop` vem de outra thread (o
+harness de teste) ou de um sinal (`SIGINT`)? A resposta classica e o self-pipe: no
+`start`, o servidor cria um par `IO.pipe` e poe a ponta de leitura no conjunto de
+leitura do `select`. `stop` so escreve um byte na ponta de escrita. Isso faz o
+`select` retornar imediatamente; o loop ve que o self-pipe ficou legivel e sai.
+
+Repare na divisao de trabalho: `stop` nao fecha sockets nem mexe em estrutura
+compartilhada. Ele so acorda o loop. Quem fecha tudo e a propria thread do loop, no
+`ensure` do `start`. Isso evita corrida: uma so thread e dona dos sockets e do mapa
+de conexoes. A unica coordenacao entre threads e o self-pipe (a escrita/leitura do
+pipe ja da o happens-before) e um pequeno mutex que protege o mapa de conexoes para
+o `tracked_client_count`, que o teste le de fora.
+
+### 16.6 Por que os locks internos continuam
+
+Esta e a decisao mais sutil da rodada, e a que mais ensina sobre fronteiras. Com o
+servidor single-threaded, o `@write_mutex` do `AofCommandExecutor` e o mutex do
+`Store` passam a ser sempre sem contencao: so existe uma thread executando comandos.
+A tentacao e remove-los "ja que nao ha concorrencia".
+
+Nao removi, e a razao e de camadas. O modelo de concorrencia e uma decisao da
+interface, nao do dominio nem da aplicacao. Se o `Store` e o `AofCommandExecutor`
+removessem seus locks assumindo "o servidor e single-threaded", eles passariam a
+depender de um detalhe da borda. No dia em que alguem dirigir a aplicacao por outro
+driver (um pool de threads, um teste concorrente, um segundo event loop por shard),
+as camadas internas estariam silenciosamente erradas. Mantendo os locks, o dominio e
+a aplicacao continuam corretos sob qualquer driver; com o event loop atual eles
+ficam apenas sem contencao, o que e barato. A licao: uma mudanca de concorrencia
+bem-feita fica contida na camada que a decide.
+
+Isso tambem explica por que o teste da rodada passada,
+`test_serializes_durable_record_with_store_mutation`, continua valido. Ele protege
+uma invariante da camada de aplicacao (append e mutacao como um ponto unico), nao do
+servidor. Trocar o servidor nao mexe nessa invariante.
+
+### 16.7 Como os testes guiaram a troca sem regressao
+
+A reescrita do servidor nao teve um teste vermelho proprio, e isso foi de proposito.
+Os testes de integracao existentes ja dirigem sockets TCP reais (`PING`, `SET`,
+`GET`, `QUIT`, cinco clientes concorrentes, um comando RESP2 real, um erro de
+protocolo visivel) e nao conhecem o modelo interno do servidor. Eles foram a rede de
+seguranca: se passassem contra o reactor sem mudanca, o comportamento observavel
+estava preservado. Passaram. O unico ajuste foi de honestidade: dois testes citavam
+"thread" no nome para algo que agora e conexao, entao foram renomeados, e adicionei
+um teste que escreve um comando em dois pedacos com uma pausa no meio, exercitando o
+buffer por conexao que o modelo antigo nem precisava.
+
+O parsing incremental, esse sim, veio primeiro como `consume` aditivo e testado, com
+a suite verde, antes de o servidor passar a depender dele. So depois que o reactor
+estava verde o `read_request` bloqueante foi removido. Essa ordem (adicionar o novo,
+migrar, remover o velho) manteve cada commit verde e atomico, em vez de um salto
+unico arriscado.
+
+### 16.8 O que continua valendo o trade
+
+O reactor herda o trade do Redis: uma so thread significa "uma coisa de cada vez".
+Um comando CPU-bound trava o loop inteiro, porque nao ha outra thread para tocar os
+demais clientes. Para um cache, onde os comandos sao curtos, esse trade compra
+simplicidade enorme: nenhum lock no caminho de execucao de comando, nenhuma corrida
+entre comandos, ordem total natural. Quando o projeto quiser escalar, o caminho nao
+e voltar a thread-por-cliente, e sim medir o custo por comando e, se preciso, rodar
+varios event loops por shard, cada um dono do seu pedaco do keyspace.

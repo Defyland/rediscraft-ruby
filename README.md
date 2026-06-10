@@ -23,7 +23,7 @@ operability fundamentals. The repository is not a Redis replacement.
 - Text protocol over TCP, plus RESP2 as an alternate protocol adapter.
 - Commands: `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`,
   `INFO`, and `QUIT`.
-- Thread-safe in-memory store.
+- Single-threaded event-loop server (`IO.select`) over a thread-safe in-memory store.
 - Lazy TTL expiration, deterministic between live execution and AOF replay.
 - Append-only file persistence with replay on startup, optional `fsync`, and
   compaction that rewrites the log from live state.
@@ -62,8 +62,11 @@ is intentionally a non-HTTP marker because this is not an HTTP API.
 
 ## 9. Async or event architecture
 
-There is no broker or domain event stream in the current scope. AOF records are
-internal durability records.
+The TCP server is a single-threaded reactor: one thread multiplexes every client
+with `IO.select` and non-blocking sockets, buffering partial frames per
+connection. There is no broker or domain event stream; AOF records are internal
+durability records. See
+[docs/adr/0004-use-event-loop-over-thread-per-client.md](docs/adr/0004-use-event-loop-over-thread-per-client.md).
 
 ## 10. Database design
 
@@ -124,7 +127,7 @@ bin/check
 
 - A partial trailing AOF record is ignored during replay.
 - Expired keys are removed lazily when read or mutated.
-- A TCP client disconnect affects only that client thread.
+- A TCP client disconnect closes only that connection in the event loop.
 - The server is not safe for untrusted networks.
 
 ## 19. Roadmap
