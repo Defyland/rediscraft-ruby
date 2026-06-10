@@ -43,8 +43,9 @@ replay are implemented.
 
 ## Scalability Bar
 
-The first implementation is single-process and thread-per-client. Sharding,
-replication, and clustering are out of scope.
+The implementation is single-process and runs a single-threaded event loop
+(`IO.select` with non-blocking sockets). Sharding, replication, and clustering are
+out of scope.
 
 ## Operational Cost Bar
 
