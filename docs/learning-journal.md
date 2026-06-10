@@ -77,6 +77,19 @@ duraveis emitidos e replay precisava de um teste de cobertura explicito. As
 correcoes mantiveram o desenho pequeno: tracking de thread para socket no TCP,
 decoder AOF estrito e teste de contrato sem criar um aplicador novo.
 
+A rodada seguinte de revisao Ruby/termonuclear olhou para concorrencia e limpeza
+estrutural e encontrou quatro pontos. O mais grave estava no `AofCommandExecutor`:
+ele gravava o registro duravel e mutava o store em duas secoes criticas separadas,
+entao dois clientes escrevendo a mesma chave podiam gravar no AOF em uma ordem e
+aplicar no store em outra, fazendo o replay divergir do estado vivo. Os outros
+tres eram de qualidade: o formatter textual ainda carregava a heuristica antiga
+que ja tinha sido substituida por tipos de resposta explicitos, `Store#delete`
+escondia uma chamada load-bearing de expiracao preguicosa, e o help do `--aof`
+ainda dizia "future support" para um recurso ja ligado. As correcoes mantiveram o
+desenho pequeno: um unico mutex de escrita no decorator de AOF, remocao de codigo
+morto no formatter, intencao explicita no delete e texto de CLI alinhado ao
+comportamento.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -139,6 +152,28 @@ Frame AOF estrito: escolhido porque recovery nao deve aplicar um comando quando
 o payload tem bytes sobrando. A alternativa rejeitada foi tolerar lixo no fim do
 frame, porque isso escondia corrupcao parcial.
 
+Mutex de escrita no AofCommandExecutor: escolhido porque o registro duravel e a
+mutacao em memoria precisam ser um unico ponto de linearizacao. A alternativa
+rejeitada foi confiar no mutex do store e no mutex do AofLog separadamente, porque
+cada um protege apenas a sua propria secao critica e nenhum garante que a ordem de
+append seja a mesma ordem de aplicacao. So as leituras ficam fora desse mutex,
+porque elas nao entram no AOF e nao podem reordenar o historico duravel.
+
+Remover a heuristica do formatter textual: escolhido porque o tipo de resposta ja
+e explicito desde `Response`. A alternativa rejeitada foi manter o ramo de
+fallback "por seguranca"; na pratica ele era inalcancavel e, pior, transformava
+uma violacao de contrato em string silenciosa em vez de falhar alto.
+
+Tornar a expiracao preguicosa explicita em delete: escolhido porque a chamada
+`live_entry_for` era load-bearing mas invisivel. A alternativa rejeitada foi
+deixar a intencao implicita; uma futura limpeza poderia remover a linha "sem
+efeito" e quebrar `DEL` em chave expirada sem nenhum teste vermelho.
+
+Corrigir o help do `--aof`: escolhido porque a saida operacional deve refletir o
+comportamento real. A alternativa rejeitada foi tratar texto de CLI como
+cosmetico; um help que promete "future support" para um recurso ativo corroi a
+confianca de quem opera o servidor.
+
 ## 5. Pros e contras das decisoes principais
 
 Texto simples no protocolo TCP e facil de depurar, mas nao e binario seguro.
@@ -170,6 +205,19 @@ unico: `TcpServer`.
 Decoder AOF estrito reduz tolerancia a corrupcao silenciosa, mas fixtures manuais
 precisam ter tamanho correto. Isso e desejavel para ensinar recovery com framing
 real.
+
+Mutex de escrita unico no AofCommandExecutor deixa a durabilidade linearizavel,
+mas serializa todas as escritas duraveis em um ponto so. Isso e coerente com a
+filosofia de mutex unico do store e e aceitavel para estudo; sob escrita pesada
+vira gargalo, como o resto do projeto. As leituras continuam concorrentes porque
+ficam fora desse mutex.
+
+Formatter sem heuristica fica menor e falha alto quando recebe algo que nao e
+`Response`, o que e melhor para depurar contrato; em troca, ele deixa de aceitar
+entradas avulsas que, de qualquer forma, nunca chegavam pela borda TCP.
+
+Delete explicito custa duas linhas a mais que a versao compacta, mas paga isso
+tornando a regra de expiracao visivel no ponto onde ela importa.
 
 ## 6. Erros, decisoes fracas ou correcoes
 
@@ -237,6 +285,30 @@ exato do payload.
 O contrato entre comandos duraveis e replay estava correto para os comandos
 atuais, mas dependia de leitura humana. Foi adicionado um teste que falha quando
 um comando entra como duravel no registry sem cobertura de replay.
+
+O `AofCommandExecutor` gravava o registro duravel e so depois aplicava a mutacao,
+cada um sob o seu proprio mutex. Sob dois clientes concorrentes na mesma chave, o
+cliente A podia gravar `SET key A`, perder a CPU antes de mutar, e o cliente B
+gravar `SET key B` e mutar; quando A finalmente mutava, o store terminava em A
+enquanto o AOF terminava em B. Apos um crash e replay, o estado recuperado
+divergia do estado vivo. A correcao colocou append e mutacao no mesmo mutex de
+escrita, restaurando a igualdade entre ordem do log e ordem de aplicacao.
+
+O formatter textual ainda tinha um ramo de heuristica que decidia entre status e
+bulk por regex (`simple_string?`), alem de ramos para `Integer` e para `to_s`
+generico e uma recursao inalcancavel. Esse era exatamente o desenho que o commit
+de tipos explicitos dizia ter substituido, mas o codigo morto continuava presente.
+A correcao removeu os ramos inalcancaveis e manteve so o contrato real: `Response`
+ou `nil`.
+
+`Store#delete` chamava `live_entry_for(key)` e descartava o retorno. A chamada era
+load-bearing: ela expira a chave antes do delete para que `DEL` em chave expirada
+retorne 0. A correcao trocou para `return 0 if live_entry_for(key).nil?` e
+adicionou um teste de caracterizacao para travar esse comportamento.
+
+O help do `--aof` dizia "Accepted for future AOF support" mesmo com o AOF ligado
+logo abaixo (replay no boot e decorator duravel). A correcao alinhou o texto ao
+comportamento real.
 
 ## 7. Como o TDD foi usado
 
@@ -332,9 +404,29 @@ comandos que `CommandRegistry` marca como duraveis contra replay real. Esse test
 nao nasceu vermelho para o estado atual; ele existe para impedir drift na proxima
 feature mutante.
 
+Red: `test/unit/aof_command_executor_test.rb` ganhou um teste que estaciona o
+primeiro escritor dentro do `append` (via um AOF de teste que bloqueia em um
+`Queue`), deixa o segundo escritor completar e depois libera o primeiro. No codigo
+antigo o store terminava com o valor do primeiro escritor enquanto o ultimo
+registro do AOF era do segundo, falhando a invariante "ultimo registro duravel
+reflete a ultima mutacao".
+Green: `AofCommandExecutor` passou a fazer append e mutacao no mesmo
+`@write_mutex`. O teste e deterministico no veredito: no codigo corrigido o segundo
+escritor fica provadamente bloqueado no mutex enquanto o primeiro esta estacionado,
+entao o `join(0.2)` expira e a ordem final fica consistente; no codigo antigo o
+segundo escritor sempre completa antes da liberacao. O timeout afeta so a duracao,
+nunca o resultado da assertiva.
+
+Red: `test/unit/command_executor_test.rb` ganhou
+`test_del_on_expired_key_reports_zero`. Ele nao nasceu vermelho contra o estado
+atual; existe para impedir que uma futura limpeza do `delete` remova a expiracao
+preguicosa sem ser notada.
+Green: `Store#delete` ficou explicito sem mudar o comportamento observavel.
+
 ## 8. Quais testes protegem quais decisoes
 
-`test/unit/command_executor_test.rb` protege comando, aridade e TTL.
+`test/unit/command_executor_test.rb` protege comando, aridade, TTL e que `DEL`
+em chave expirada reporta 0.
 
 `test/unit/command_registry_test.rb` protege o contrato compartilhado entre
 executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
@@ -350,8 +442,9 @@ concorrentes, incluindo comando RESP2 real e erro RESP malformado visivel ao
 cliente. Tambem protege shutdown de clientes ociosos.
 
 `test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
-mutacao, ignorar frame parcial, rejeitar frame com bytes extras e manter contrato
-entre comandos duraveis e replay.
+mutacao, ignorar frame parcial, rejeitar frame com bytes extras, manter contrato
+entre comandos duraveis e replay e serializar o registro duravel com a mutacao do
+store sob escrita concorrente.
 
 ## 9. Timeline dos commits atomicos
 
@@ -389,6 +482,10 @@ entre comandos duraveis e replay.
 | `05a9349` | `stop` nao encerrava clientes ociosos | TCP passa a rastrear e fechar sockets ativos | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/test`, `bin/check` |
 | `7b3dc30` | AOF aceitava bytes extras no frame | Decoder exige consumo exato do payload | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
 | `9fd849f` | Contrato duravel/replay dependia de revisao manual | Teste cobre todos os comandos duraveis publicos contra replay | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `8e5115f` | Append e mutacao do AOF eram secoes criticas separadas | `AofCommandExecutor` serializa append e mutacao no mesmo mutex de escrita | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/test`, `bin/check` |
+| `002520f` | Formatter textual carregava heuristica morta | Remocao do fallback inalcancavel; formatter so trata `Response` ou `nil` | `bin/test`, `bin/check` |
+| `b7789b4` | `delete` escondia expiracao preguicosa load-bearing | Intencao explicita no delete e teste de `DEL` em chave expirada | `ruby -Itest test/unit/command_executor_test.rb`, `bin/test`, `bin/check` |
+| `815ff40` | Help do `--aof` dizia "future support" para recurso ativo | Texto de CLI alinhado ao comportamento real | `ruby -c bin/rediscraft`, `bin/test`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -404,6 +501,8 @@ entre comandos duraveis e replay.
 - Novo comando duravel deve atualizar o teste de contrato entre registry, AOF e
   replay.
 - Shutdown de interface externa deve liberar sockets e threads que ela abriu.
+- Nova operacao duravel deve gravar o registro e aplicar a mutacao sob o mesmo
+  mutex de escrita, para que a ordem do log seja a ordem de aplicacao.
 - Teste unitario vem antes de adapter externo.
 
 ## 11. Como adicionar a proxima feature
@@ -457,7 +556,117 @@ clientes ociosos, decoder AOF aceitava bytes extras no frame e faltava teste de
 contrato entre comandos duraveis e replay. Todos foram corrigidos. Evidencia:
 `bin/test` e `bin/check` verdes com 37 testes e 90 assertions.
 
+Nova rodada de revisao Ruby/termonuclear focada em concorrencia e limpeza
+encontrou quatro ajustes: append e mutacao do AOF em secoes criticas separadas
+(risco de divergencia entre log e estado vivo), heuristica morta no formatter
+textual, expiracao preguicosa load-bearing escondida em `delete` e help de CLI
+desatualizado. Todos foram corrigidos em commits atomicos. Evidencia: `bin/test`
+e `bin/check` verdes com 39 testes e 92 assertions. O risco mais grave dessa
+rodada era de durabilidade sob concorrencia, nao de throughput; os riscos
+residuais conhecidos continuam intencionais (sem auth, TLS, limite de conexoes,
+backpressure, `fsync` configuravel, snapshots, replicacao ou benchmarks de
+contencao).
+
 Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
 o objetivo nao e apresentar uma arquitetura perfeita desde o inicio, mas mostrar
 como testes e revisoes mudaram o desenho.
+
+## 14. Nota tecnica detalhada: rodada de serializacao AOF e limpeza
+
+Esta secao registra, em nivel de especialista, o que cada mudanca dessa rodada
+fez e por que. Ela aprofunda o que as secoes anteriores resumem.
+
+### 14.1 Serializacao do registro duravel com a mutacao (flagship)
+
+O modelo de durabilidade do Rediscraft e write-ahead: o `AofCommandExecutor`
+grava o registro duravel antes de aplicar a mutacao no store, para que uma falha
+no arquivo nao deixe o store adiantado em relacao ao log. Essa decisao continua
+valida. O problema era outro: a granularidade do lock.
+
+Antes, `execute` fazia duas operacoes atomicas independentes:
+
+1. `@aof.append(durable_parts)` — atomica sob o mutex do `AofLog`.
+2. `@inner.execute(parts)` — atomica sob o mutex do `Store`.
+
+Cada operacao era atomica em si, mas o par nao era. Entre o passo 1 e o passo 2
+de um cliente, outro cliente podia executar o par inteiro. A ordem do AOF passa a
+ser decidida no passo 1 (quem pega o mutex do `AofLog` primeiro) e a ordem do
+store no passo 2 (quem pega o mutex do `Store` primeiro). Nada forca essas duas
+ordens a coincidir.
+
+Trace do bug, dois clientes na chave `key`:
+
+- A: append `SET key A` (AOF = [A]); perde a CPU antes de mutar.
+- B: append `SET key B` (AOF = [A, B]); muta (store = B); termina.
+- A: muta (store = A); termina.
+
+Estado vivo final = A. Replay do AOF aplica A depois B = B. Divergencia: um crash
+logo apos esse ponto recupera B, mas A foi confirmado por ultimo no estado vivo.
+Isso quebra a propriedade que o AOF existe para garantir: o log deve ser uma
+serializacao das mutacoes na ordem em que elas realmente aconteceram.
+
+A correcao coloca append e mutacao no mesmo `@write_mutex` dentro do
+`AofCommandExecutor`. Com isso, o par vira um unico ponto de linearizacao: entre
+o append e a mutacao de um escritor, nenhum outro escritor pode appendar nem
+mutar. A ordem do log passa a ser, por construcao, a ordem de aplicacao.
+
+Tres detalhes de desenho importam:
+
+- Ordem de locks. `@write_mutex` e sempre o mais externo; os mutexes do `Store` e
+  do `AofLog` sao folhas adquiridas dentro dele. Nenhum codigo adquire
+  `@write_mutex` segurando um mutex folha, entao nao ha ciclo e nao ha deadlock.
+- Leituras ficam fora. `GET`, `TTL` e `EXISTS` nao produzem registro duravel,
+  entao `durable_parts` e `nil` e o caminho retorna antes do `@write_mutex`. Uma
+  leitura pode observar o estado entre o append e a mutacao de uma escrita, mas
+  isso e inofensivo: leituras nao entram no log e nao reordenam o historico. Nao
+  serializar leituras preserva a concorrencia de leitura que o projeto ja tinha.
+- Por que o Redis nao precisa disso. O Redis e single-threaded no loop de
+  eventos: executar o comando e propagar para AOF/replicacao acontecem no mesmo
+  tick, sem outro comando no meio. O `@write_mutex` reconstroi, em um servidor
+  thread-por-cliente, a mesma atomicidade que o loop unico do Redis da de graca.
+
+O teste e deterministico no veredito apesar de exercitar uma corrida. Ele
+estaciona o primeiro escritor dentro do `append` segurando um `Queue`, deixa o
+segundo escritor rodar e so entao libera o primeiro. No codigo antigo o segundo
+escritor sempre completa (nao ha lock que o segure) e a invariante "ultimo
+registro duravel == ultima mutacao" falha. No codigo corrigido o segundo escritor
+fica bloqueado no `@write_mutex` enquanto o primeiro esta estacionado; o
+`join(0.2)` expira, o primeiro e liberado e a ordem final fica consistente. O
+timeout muda a duracao do teste, nunca o resultado da assertiva.
+
+### 14.2 Formatter textual sem heuristica
+
+O commit que introduziu tipos de resposta explicitos em `Response` dizia ter
+substituido a heuristica que decidia entre status e bulk por regex. Na pratica, o
+codigo novo foi adicionado e o antigo nao foi removido: `format` ainda tinha um
+ramo `simple_string?`, um ramo para `Integer`, um ramo `to_s` generico e uma
+recursao que nunca era alcancada (os quatro `kind` possiveis ja eram tratados
+acima dela). Como a borda TCP sempre passa um `Response` ou `nil`, todo esse
+bloco era inalcancavel.
+
+Codigo morto inalcancavel e pior que inofensivo: ele sugere um contrato que nao
+existe e, neste caso, transformava uma violacao de contrato em string silenciosa.
+A correcao deixou `format` tratando apenas `Response` e `nil`. Se um nao-Response
+chegar, `format` agora levanta `NoMethodError` em vez de inventar uma resposta;
+falhar alto e o comportamento desejado para um bug de contrato.
+
+### 14.3 Expiracao preguicosa explicita em delete
+
+`Store#delete` chamava `live_entry_for(key)` e ignorava o retorno. A chamada
+parece removivel, mas e load-bearing: `live_entry_for` aplica a expiracao
+preguicosa, removendo a chave se ela ja expirou. Sem ela, `DEL` em uma chave
+expirada removeria a entrada fisica ainda presente e responderia 1, quando o
+contrato publico e responder 0 (a chave ja nao existia). A correcao trocou a linha
+muda por `return 0 if live_entry_for(key).nil?`, que torna a fronteira de
+expiracao visivel e fica igual ao estilo de `expire_at` e `persist`. Um teste de
+caracterizacao (`DEL` em chave expirada retorna 0) trava o comportamento contra
+futuras limpezas.
+
+### 14.4 Help de CLI alinhado ao comportamento
+
+O `--aof PATH` descrevia "Accepted for future AOF support", mas o `bin/rediscraft`
+ja faz replay no boot e embrulha o executor com o decorator duravel quando a flag
+e passada. Texto de help e saida operacional: prometer "future" para um recurso
+ativo desinforma quem opera o servidor. A correcao alinhou o texto ao
+comportamento real.
