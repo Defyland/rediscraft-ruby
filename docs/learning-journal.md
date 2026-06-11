@@ -56,14 +56,15 @@ ordem de leitura no fim da secao.
 Ordem de leitura sugerida depois disto:
 
 1. Leia `README.md` para entender o produto e limites.
-2. Leia `docs/api/protocol.md` para ver o contrato externo.
-3. Leia `test/unit/command_executor_test.rb` para entender os comandos.
-4. Leia `lib/rediscraft/application/command_registry.rb` para ver o contrato
+2. Leia `docs/code-walkthrough.md` para uma passada guiada pelo codigo atual.
+3. Leia `docs/api/protocol.md` para ver o contrato externo.
+4. Leia `test/unit/command_executor_test.rb` para entender os comandos.
+5. Leia `lib/rediscraft/application/command_registry.rb` para ver o contrato
    compartilhado de aridade e durabilidade.
-5. Leia `lib/rediscraft/domain/store.rb` para ver regras de chave e TTL.
-6. Leia `lib/rediscraft/interface/tcp_server.rb` para ver a borda TCP.
-7. Leia `lib/rediscraft/infrastructure/aof_log.rb` para ver replay.
-8. Leia os ADRs em `docs/adr`.
+6. Leia `lib/rediscraft/domain/store.rb` para ver regras de chave e TTL.
+7. Leia `lib/rediscraft/interface/tcp_server.rb` para ver a borda TCP.
+8. Leia `lib/rediscraft/infrastructure/aof_log.rb` para ver replay.
+9. Leia os ADRs em `docs/adr`.
 
 ## 3. Historia cronologica da implementacao
 
@@ -163,6 +164,15 @@ conexao. Para isso, o contrato de protocolo deixou de ser `read_request(io)`
 incremental nos protocolos (aditivo), depois a reescrita do servidor, depois a
 remocao do `read_request` morto. Os locks das camadas internas ficaram de
 proposito: a mudanca de concorrencia mora so na interface.
+
+Depois veio uma rodada sem feature de runtime, mas importante para o papel do
+repo como material de estudo. O projeto ja ensinava bem *evolucao* e
+*trade-off*, mas ainda cobrava bagagem demais de quem abria o codigo pela
+primeira vez. Faltava um guia curto de leitura do estado atual: por onde comecar,
+que arquivo monta o processo, qual metodo faz o dispatch principal, que sintaxe
+Ruby aparece com frequencia. A resposta foi adicionar `docs/code-walkthrough.md`
+como camada didatica separada, sem inflar o journal nem apagar seu papel
+cronologico.
 
 ## 4. Decisao por decisao
 
@@ -757,6 +767,7 @@ replayavel.
 | `2379c9d` | `apply_durable` duplicava o dispatch e a aridade do `execute` | Replay roteia pelo `execute`; so `EXPIREAT` permanece interno | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/check` |
 | `2754606` | Amostra por ordem de insercao deixava chaves expiradas na sombra | Amostragem aleatoria na expiracao ativa, como o Redis | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
 | `92a4f82` | Os dois `format` duplicavam o dispatch e ja tinham divergido | `ResponseFormatting` centraliza o roteamento; protocolos so codificam frames | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/unit/text_protocol_test.rb`, `bin/check` |
+| `9e146ce` | O projeto ensinava bem evolucao, mas mal a primeira leitura do codigo atual | `docs/code-walkthrough.md` guia o reader por fluxo, arquivos, funcoes e sintaxe Ruby; README aponta para ele | `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -893,6 +904,15 @@ Importante: o journal deve preservar que as decisoes iniciais existiram e foram
 melhoradas. As secoes acima usam "primeiro" e "depois da revisao" de proposito:
 o objetivo nao e apresentar uma arquitetura perfeita desde o inicio, mas mostrar
 como testes e revisoes mudaram o desenho.
+
+Rodada de aprofundamento didatico: a revisao do material de estudo encontrou um
+tipo diferente de falha. O projeto ja estava forte para quem pensa em camadas,
+trade-offs e evolucao, mas ainda pedia bagagem demais para quem abria o codigo
+pela primeira vez. A correcao nao foi reescrever o journal nem entupir o README:
+foi criar um guia de leitura do codigo atual, separado, com fluxo de request,
+ordem curta de leitura, funcoes-chave e notas da sintaxe Ruby usada aqui.
+Evidencia: `bin/check` verde com 63 testes e 3550 assertions. O journal passa a
+apontar para esse guia, mas continua sendo a historia cronologica do projeto.
 
 ## 14. Nota tecnica detalhada: rodada de serializacao AOF e limpeza
 
@@ -1615,3 +1635,85 @@ licao:
   principio declarado do projeto. Respeitar a restricao que o projeto escolheu vale
   mais do que o gate extra -- a checagem de smell continua sendo leitura humana,
   como nesta rodada.
+
+## 21. Nota tecnica detalhada: rodada de aprofundamento didatico
+
+Esta rodada nao mudou comportamento de runtime. O alvo foi outro: reduzir o custo
+de *entrada* no codigo sem sacrificar a honestidade historica do journal.
+
+### 21.1 O problema real: bom journal, onboarding pesado
+
+O journal ja fazia muito bem uma coisa dificil: mostrar que o desenho nao nasceu
+pronto, e sim que foi evoluindo por TDD, review e correcoes. Isso e excelente
+para um leitor intermediario ou senior, porque ensina julgamento. Mas havia um
+custo: para quem abria o repo pela primeira vez, faltava uma passada guiada pelo
+codigo que existe *hoje*. O leitor era jogado num material de 1600+ linhas,
+cheio de contexto correto, sem uma resposta curta para perguntas basicas:
+
+- por onde comeco?;
+- que arquivo monta o processo?;
+- qual metodo e o dispatch principal?;
+- o que esse `Data.define`, `&.` ou `(3..)` quer dizer?;
+- onde termina a responsabilidade do protocolo e onde comeca a do dominio?
+
+Esse e o tipo de friccao que nao aparece em benchmark, nem em teste, nem em
+review termo-nuclear. Mas num projeto que se vende como material de estudo, e um
+defeito real.
+
+### 21.2 A decisao: guia separado, nao remendo no journal
+
+A alternativa obvia era despejar tudo isso no proprio journal. Rejeitei por dois
+motivos.
+
+O primeiro e estrutural. O journal tem um papel claro: historia de evolucao. Se
+ele passasse a explicar toda funcao central, toda sintaxe Ruby e todo fluxo de
+request, ele deixaria de ser um journal e viraria uma mistura de diario, livro e
+referencia. O resultado seria um documento ainda maior e mais confuso.
+
+O segundo e didatico. Perguntas de "como ler o codigo atual" e perguntas de "por
+que o projeto mudou assim ao longo do tempo" sao diferentes. Mistura-las no mesmo
+texto piora as duas.
+
+Por isso a solucao foi `docs/code-walkthrough.md`: um guia da *fotografia atual*
+do projeto. O journal continua sendo o filme.
+
+### 21.3 O que entrou no `code-walkthrough`
+
+O guia novo faz quatro coisas que o journal nao fazia bem:
+
+1. **Da uma ordem de leitura curta.** Comeca no `README`, passa pelo assembly
+   root (`bin/rediscraft`), pelo contrato (`CommandRegistry`), pela aplicacao
+   (`CommandExecutor`), pelo dominio (`Store`), pela durabilidade (AOF) e so
+   entao chega ao reactor (`TcpServer`).
+2. **Explica um request ponta a ponta.** Um `SET name Ada` vira uma trilha
+   concreta de `read_buffer -> protocol.consume -> executor.execute -> store.set
+   -> protocol.format -> flush`. Isso ajuda o leitor a montar o mapa mental antes
+   de cair em detalhes locais.
+3. **Aponta as funcoes-chave em cada arquivo.** Em vez de dizer "leia o store",
+   o guia diz "leia `set/get/delete`, depois `expire/ttl/persist`, depois
+   `store_entry/remove_entry/live_entry_for`". Isso reduz o custo de procura.
+4. **Traduz a sintaxe Ruby que aparece no proprio repo.** `Data.define`,
+   `arity === parts.length`, `filter_map`, `Struct.new`, `&.`, `then`, ranges
+   sem fim, `byteslice`: tudo explicado no contexto onde aparece, sem virar curso
+   generico de Ruby.
+
+Em outras palavras: o guia nao tenta ensinar Ruby inteiro; ele ensina o Ruby que
+este repositorio usa.
+
+### 21.4 O que deliberadamente continua fora
+
+Mesmo depois dessa rodada, o material continua *nao* fazendo tres coisas:
+
+- Nao e comentario linha a linha de cada funcao do projeto. Isso incharia a doc
+  e ficaria desatualizado rapido.
+- Nao e curso de Ruby do zero. O objetivo e reduzir friccao local, nao substituir
+  um livro da linguagem.
+- Nao moveu a explicacao dos trade-offs para fora do journal. A historia das
+  correcoes, dos erros e das revisoes continua no journal porque e ali que ela
+  ensina melhor.
+
+O ponto de chegada e mais claro agora:
+
+- `README`: produto e limites.
+- `docs/code-walkthrough.md`: leitura guiada do codigo atual.
+- `docs/learning-journal.md`: evolucao, revisoes e raciocinio tecnico.
