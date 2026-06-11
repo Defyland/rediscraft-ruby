@@ -1,10 +1,13 @@
 # frozen_string_literal: true
 
 require "rediscraft/application/response"
+require "rediscraft/interface/response_formatting"
 
 module Rediscraft
   module Interface
     class TextProtocol
+      include ResponseFormatting
+
       VALUE_TAIL_COMMANDS = ["SET"].freeze
 
       # Incremental parse for the event loop. Returns [parts, rest] once a full
@@ -33,27 +36,32 @@ module Rediscraft
         end
       end
 
-      def format(response)
-        return "$-1\n" if response.nil?
-
-        return "-#{response.payload}\n" if response.status == :error
-        return "$-1\n" if response.kind == :bulk && response.payload.nil?
-        return bulk(response.payload) if response.kind == :bulk
-        return ":#{response.payload}\n" if response.kind == :integer
-        return array(response.payload) if response.kind == :array
-
-        "+#{response.payload}\n"
-      end
-
       private
 
-      def bulk(value)
+      # Wire encoders for each Response kind; ResponseFormatting routes to them.
+      def simple_frame(payload)
+        "+#{payload}\n"
+      end
+
+      def error_frame(payload)
+        "-#{payload}\n"
+      end
+
+      def integer_frame(payload)
+        ":#{payload}\n"
+      end
+
+      def null_bulk
+        "$-1\n"
+      end
+
+      def bulk_frame(value)
         string = value.to_s
         "$#{string.bytesize} #{string}\n"
       end
 
-      def array(elements)
-        "*#{elements.length}\n#{elements.map { |element| bulk(element) }.join}"
+      def array_frame(elements)
+        "*#{elements.length}\n#{elements.map { |element| bulk_frame(element) }.join}"
       end
     end
   end

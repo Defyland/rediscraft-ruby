@@ -2,10 +2,13 @@
 
 require "rediscraft/application/response"
 require "rediscraft/interface/protocol_error"
+require "rediscraft/interface/response_formatting"
 
 module Rediscraft
   module Interface
     class Resp2Protocol
+      include ResponseFormatting
+
       CRLF = "\r\n"
       INCOMPLETE = :incomplete
 
@@ -21,19 +24,6 @@ module Rediscraft
         [command, buffer.byteslice(cursor..) || ""]
       rescue ArgumentError
         raise ProtocolError, "invalid integer"
-      end
-
-      def format(response)
-        if response.is_a?(Rediscraft::Application::Response)
-          return "-#{response.payload}#{CRLF}" if response.status == :error
-          return "$-1#{CRLF}" if response.kind == :bulk && response.payload.nil?
-          return bulk(response.payload) if response.kind == :bulk
-          return ":#{response.payload}#{CRLF}" if response.kind == :integer
-          return "+#{response.payload}#{CRLF}" if response.kind == :simple
-          return array(response.payload) if response.kind == :array
-        end
-
-        bulk(response)
       end
 
       private
@@ -113,13 +103,30 @@ module Rediscraft
         [buffer.byteslice(cursor, ending - cursor), ending + CRLF.bytesize]
       end
 
-      def bulk(value)
+      # Wire encoders for each Response kind; ResponseFormatting routes to them.
+      def simple_frame(payload)
+        "+#{payload}#{CRLF}"
+      end
+
+      def error_frame(payload)
+        "-#{payload}#{CRLF}"
+      end
+
+      def integer_frame(payload)
+        ":#{payload}#{CRLF}"
+      end
+
+      def null_bulk
+        "$-1#{CRLF}"
+      end
+
+      def bulk_frame(value)
         string = value.to_s
         "$#{string.bytesize}#{CRLF}#{string}#{CRLF}"
       end
 
-      def array(elements)
-        "*#{elements.length}#{CRLF}#{elements.map { |element| bulk(element) }.join}"
+      def array_frame(elements)
+        "*#{elements.length}#{CRLF}#{elements.map { |element| bulk_frame(element) }.join}"
       end
     end
   end
