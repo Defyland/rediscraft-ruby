@@ -133,6 +133,10 @@ bin/check
 ruby benchmarks/bench.rb --clients 8 --ops 3000 --warmup 1000 --keys 50000
 ```
 
+If you want a guided first pass through the code, read
+[`docs/code-walkthrough.md`](docs/code-walkthrough.md) before diving into the
+full journal.
+
 See [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md) for how the
 benchmark measures (and what it deliberately does not), and
 [benchmarks/baseline.md](benchmarks/baseline.md) for collected numbers.
