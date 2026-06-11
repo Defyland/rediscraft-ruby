@@ -753,6 +753,10 @@ replayavel.
 | `d39df76` | Testes deterministicos nao cobriam entrada arbitraria | Fuzz afirma totalidade de `consume` em 20k inputs | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/check` |
 | `e15b212` | So existia o tipo string | Listas (`LPUSH`/`RPUSH`/`LLEN`/`LRANGE`) com tipo, `WRONGTYPE` e durabilidade | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
 | `f3de935` | Faltava formatar arrays no fio | `:array` formatado em RESP2 e no protocolo textual | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/check` |
+| `d247752` | Erro inesperado numa conexao derrubava o servidor inteiro | Fronteira de erro por conexao no reactor: dropa so a conexao e segue | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/check` |
+| `2379c9d` | `apply_durable` duplicava o dispatch e a aridade do `execute` | Replay roteia pelo `execute`; so `EXPIREAT` permanece interno | `ruby -Itest test/unit/aof_command_executor_test.rb`, `bin/check` |
+| `2754606` | Amostra por ordem de insercao deixava chaves expiradas na sombra | Amostragem aleatoria na expiracao ativa, como o Redis | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
+| `92a4f82` | Os dois `format` duplicavam o dispatch e ja tinham divergido | `ResponseFormatting` centraliza o roteamento; protocolos so codificam frames | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/unit/text_protocol_test.rb`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -1469,3 +1473,145 @@ ao vivo, o cliente ve o erro e o store nao muda; no replay, o mesmo registro lev
 porque os dois lados o tratam igual, mantendo estado vivo e reconstruido identicos.
 E o mesmo tipo de no-op que um `DEL` em chave ausente ja gerava: o AOF nao e um
 registro so de efeitos, e isso e aceito e documentado.
+
+## 20. Nota tecnica detalhada: rodada de endurecimento pos-revisao
+
+Esta rodada nao adicionou feature: ela atendeu a uma revisao de qualidade severa
+(as skills `sk-ruby-rails-code-smell-review` e `thermo-nuclear-code-quality-review`).
+O valor didatico aqui e diferente do resto do journal. Ate agora cada secao ensinou
+como *construir* uma peca; esta ensina como um senior *le* o codigo pronto e separa
+o que e refino do que e risco real. Dois achados eram P2 (mudam comportamento de
+producao), o resto P3 (custo de manutencao). Abaixo, cada um com o porque.
+
+### 20.1 Blast radius: a fronteira de erro do reactor
+
+O achado mais importante nao estava no que o codigo fazia, e sim no que ele deixava
+de fazer. Quando o servidor era thread-por-cliente, uma excecao inesperada ao
+atender um cliente matava *aquela* thread e mais ninguem. Ao migrar para o reactor
+single-threaded (secao 16), todo cliente passou a ser multiplexado por uma unica
+thread. A consequencia, que a migracao introduziu sem alarde: uma excecao que
+escapasse de `handle_readable` subia pelo `event_loop`, caia no `ensure` do `start`
+e derrubava o servidor **inteiro**, com todas as conexoes. O raio de explosao de um
+unico comando ruim passou de um cliente para todos.
+
+O gatilho concreto nao e exotico. Com AOF ligado, `AofCommandExecutor#execute`
+grava no disco *antes* de mutar (append-before-mutate, secao 14). Se esse `write`
+falha por disco cheio (`Errno::ENOSPC`) ou permissao (`Errno::EACCES`), a excecao
+atravessa `dispatch -> process_buffer -> read_from -> handle_readable -> event_loop`
+e mata o processo. O `read_from` so resgatava os erros *esperados* de socket
+(`EOFError`, `Errno::ECONNRESET`, `ProtocolError`); um `IOError` de AOF nao e nenhum
+deles e passava direto. Repare que `EOFError < IOError`, mas `rescue EOFError` nao
+pega o pai `IOError` -- so subclasses. Por isso o `IOError` escapava.
+
+A correcao e uma unica fronteira em `handle_readable`: `rescue StandardError`, logar
+e fechar *so aquela* conexao, e o loop segue. E exatamente a isolacao que o modelo
+thread-por-cliente dava de graca e que o reactor precisa tornar explicita -- e o que
+o Redis faz ao proteger o event loop da falha de um cliente. Note que o `accept`
+(quando `io == @server`) tambem cai nessa fronteira, mas ali `@connections[io]` e
+`nil`, entao nada e fechado: um erro transitorio de accept (por exemplo `EMFILE`,
+muitos arquivos abertos) loga e o servidor continua escutando, em vez de morrer.
+
+O teste e a prova de que a correcao vale: um executor falso que levanta em `BOOM` e
+responde `PONG` em `PING`. O cliente que manda `BOOM` ve o socket fechar (EOF, logo
+`gets` retorna nil); um cliente novo logo depois recebe `+PONG`. Sem a fronteira, o
+segundo cliente nunca conectaria, porque o servidor ja teria morrido. Vale registrar
+o limite honesto: ja existia o teste `does_not_mutate_store_when_aof_append_fails`,
+que provava que o *executor* re-levanta sem corromper o store; o que faltava, e este
+teste cobre, e provar que o *reactor* sobrevive a essa re-levantada.
+
+### 20.2 Uma so via de execucao: replay pelo `execute` (evolucao do 19.3)
+
+A secao 19.3 descreveu `apply_durable` ganhando um `case` proprio com `LPUSH`,
+`RPUSH`, `SET`, `DEL`, `PERSIST` e `EXPIREAT`, cada um com seu guard de aridade
+(`return nil unless record.length == ...`). A revisao expos o custo disso: a aridade
+de cada comando passou a viver em *dois* lugares -- o `CommandRegistry::SPECS_BY_NAME`
+e os `record.length` a mao em `apply_durable` -- e, pior, a *resposta* de cada
+comando passou a ser produzida em dois lugares. Para `SET` sem AOF a resposta vem de
+`execute_set`; com AOF ligado, vinha de `apply_durable`. Hoje as duas concordam por
+disciplina, mas nada obrigava: mude a semantica de retorno de `LPUSH` no `execute` e
+esqueca o `apply_durable`, e o servidor passa a responder *diferente com e sem AOF*.
+E um caminho de regressao que os testes nao pegariam por construcao.
+
+A correcao foi a *menor* mudanca estrutural possivel, e e a licao central da rodada:
+nao inventar uma abstracao nova (uma "tabela de comandos" foi considerada e
+descartada por mover complexidade em vez de remover), e sim *reusar a via canonica*.
+`apply_durable` agora delega ao proprio `execute` para todo comando publico. So o
+`EXPIREAT` permanece tratado a parte, porque ele e o unico registro que o dispatch
+publico nao conhece: e a forma interna e absoluta do `EXPIRE`, carregando o instante
+calculado quando o `EXPIRE` rodou, para o replay reproduzir a expiracao exata em vez
+de recalcular de um clock novo (a determinismo que o commit `d635ba3` garantiu).
+
+Por que isso e seguro e nao so mais curto:
+
+- O guard de aridade some porque `execute` ja valida aridade pelo registry. Um
+  registro corrompido com aridade errada vira um `Response` de erro em vez de `nil`,
+  mas no replay o retorno e ignorado e o store nao muda -- estado identico ao antigo.
+- O `rescue TypeMismatch` que o 19.3 colocou em `apply_durable` nao sumiu: ele agora
+  e o mesmo `rescue` do `execute`, herdado pela delegacao. O comportamento de
+  `WRONGTYPE` no replay (um `RPUSH` numa chave string vira no-op) continua identico.
+- A resposta de cada comando passa a ter uma fonte de verdade unica. O `apply_durable`
+  encolheu de ~33 linhas de `case` paralelo para ~10. Menos codigo, menos drift, zero
+  mudanca visivel ao cliente.
+
+### 20.3 Expiracao ativa: por que aleatorio vence ordem de insercao
+
+A secao 18 introduziu a expiracao ativa amostrando `@expires.keys.first(20)`. A
+revisao apontou um defeito sutil que o comentario original subvendia como "nao
+adaptativo": pegar sempre os *mesmos* 20 primeiros por ordem de insercao significa
+que chaves volateis de TTL longo na cabeca *blindam permanentemente* as chaves
+expiradas atras delas. Uma chave expirada e nunca lida atras de 20 volateis vivos
+nunca seria evicta pelo ciclo ativo -- exatamente o vazamento que o ciclo existe
+para prevenir (a expiracao preguicosa so a pega se alguem a acessar).
+
+A correcao e trocar `.first(sample)` por `.sample(sample)`: amostragem aleatoria, que
+e justamente o que o Redis faz, e por este motivo. Com amostra aleatoria, toda chave
+volatil tem, a cada ciclo, chance de ser inspecionada; nenhuma posicao fixa pode
+sombrear outra para sempre. O custo e o mesmo `O(N)` de construir o array de chaves
+(que `.first` ja pagava), entao nao ha regressao de complexidade. O ciclo segue *nao
+adaptativo* (nao repassa quando a taxa de acerto e alta), e isso continua sendo um
+limite consciente e documentado, nao um bug.
+
+### 20.4 Dispatch de formatacao: o bug que a duplicacao escondia
+
+Os dois protocolos, texto e RESP2, tinham cada um seu metodo `format` com o mesmo
+`switch` de seis vias sobre `Response#kind`/`status`. Duplicacao de roteamento e
+chata, mas o argumento decisivo nao foi DRY -- foi que os dois ja tinham *divergido*:
+o formatador de texto tratava um `nil` puro (devolvia `$-1`), o RESP2 nao; o de
+texto nao tinha ramo explicito para `:simple` e caia no default. Duplicacao nao so
+custa edicao em dobro: ela esconde inconsistencias, porque ninguem le os dois lados
+lado a lado.
+
+A correcao e um template method, `ResponseFormatting`, incluido pelos dois protocolos.
+O modulo decide *qual* frame cada `kind` vira -- esse roteamento, que era a parte
+duplicada, agora mora num lugar so. O que o modulo deliberadamente *nao* compartilha
+sao os bytes: cada protocolo fornece seus encoders terminais (`bulk_frame`,
+`array_frame`, etc.), porque ai a diferenca e real -- o texto encerra com `\n` e poe
+o bulk numa linha so (`$3 Ada\n`), o RESP2 encerra com `\r\n` e quebra o bulk em
+duas linhas (`$3\r\nAda\r\n`). Compartilhar o roteamento e correto; compartilhar os
+bytes seria forcar dois protocolos a serem um. A divergencia some por construcao:
+adicionar um novo `kind` agora e uma edicao num lugar (o roteamento) mais um encoder
+por protocolo, em vez de mexer nos dois `format`.
+
+Esta foi a mudanca mais discutivel da rodada -- um modulo novo para so dois
+implementadores beira a indirecao que nao se paga. O que a justifica nao e a
+economia de linhas, e a correcao da divergencia: o roteamento vira uma decisao com
+dono unico, e o bug de "um trata nil, o outro nao" nao pode voltar.
+
+### 20.5 O que foi deliberadamente *nao* feito
+
+Tao importante quanto o que um senior muda e o que ele se recusa a mudar. Dois
+achados P3 foram conscientemente deixados de fora, e registrar o porque e parte da
+licao:
+
+- **Tag de tipo explicito no `Entry`.** Hoje string vs lista e inferido da classe
+  Ruby (`value.is_a?(Array)`). Para *dois* tipos isso e claro; so quando entrar um
+  terceiro (hash, set) os `is_a?` comecam a se multiplicar. Adicionar um campo
+  `:type` agora seria abstracao prematura -- a propria skill thermo-nuclear adverte
+  contra adicionar conceito que o codigo ainda nao precisa. A regra fica anotada para
+  o terceiro tipo, nao antes.
+- **Linter (RuboCop/Standard) no CI.** Seria natural num projeto cujo tema e
+  qualidade, mas o `Gemfile` declara, de proposito, "stdlib only". O `minitest` cabe
+  nisso porque acompanha o Ruby; um linter e gem externa de verdade e quebraria o
+  principio declarado do projeto. Respeitar a restricao que o projeto escolheu vale
+  mais do que o gate extra -- a checagem de smell continua sendo leitura humana,
+  como nesta rodada.
