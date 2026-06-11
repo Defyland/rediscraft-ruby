@@ -205,6 +205,38 @@ class TcpServerTest < Minitest::Test
     thread&.join(1)
   end
 
+  def test_an_unexpected_executor_error_drops_only_that_connection
+    boom_executor = Object.new
+    def boom_executor.execute(parts)
+      raise "boom" if parts.first == "BOOM"
+
+      Rediscraft::Application::Response.simple("PONG")
+    end
+    def boom_executor.active_expire_cycle; end
+
+    boom_server = Rediscraft::Interface::TcpServer.new(
+      host: "127.0.0.1", port: 0, executor: boom_executor
+    )
+    thread = Thread.new { boom_server.start }
+    sleep 0.05 until boom_server.port
+
+    victim = TCPSocket.new("127.0.0.1", boom_server.port)
+    victim.write("BOOM\n")
+    # The reactor drops the offending connection instead of crashing the loop, so
+    # the client observes a closed socket (EOF) rather than a hung server.
+    assert_nil victim.gets
+
+    # The server is still alive: a fresh client is served normally.
+    survivor = TCPSocket.new("127.0.0.1", boom_server.port)
+    survivor.write("PING\n")
+    assert_equal "+PONG\n", survivor.gets
+  ensure
+    victim&.close
+    survivor&.close
+    boom_server&.stop
+    thread&.join(1)
+  end
+
   private
 
   def build_server(protocol:)

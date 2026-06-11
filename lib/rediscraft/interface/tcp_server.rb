@@ -95,6 +95,16 @@ module Rediscraft
           conn = @connections[io]
           read_from(conn) if conn
         end
+      rescue StandardError => error
+        # The reactor multiplexes every client on one thread, so an unexpected
+        # error while serving one connection -- a failed AOF append on a full
+        # disk, an unforeseen bug in command execution -- must not escape the loop
+        # and take the whole server down with every other client. Drop just this
+        # connection and keep serving the rest, the way Redis isolates a single
+        # client's failure from the event loop.
+        warn "rediscraft: dropping connection after #{error.class}: #{error.message}"
+        conn = @connections[io]
+        close_connection(conn) if conn
       end
 
       def accept_connection
