@@ -142,13 +142,15 @@ module Rediscraft
       # with a TTL and never touched again leaks forever. Active expiration samples
       # a bounded number of keys-with-expiry and evicts the expired ones. Bounded
       # is the whole point: an O(N) sweep would stall the single-threaded loop it
-      # runs on. Sampling is insertion-ordered here, a simplification of Redis's
-      # random sampling, and it is not adaptive (no repeat on a high hit rate).
+      # runs on. Sampling is random, like Redis: a fixed insertion-ordered window
+      # would let long-lived volatile keys at the head permanently shadow expired
+      # keys behind them, so an untouched expired key could leak despite the cycle.
+      # It is still not adaptive (no repeat pass on a high hit rate).
       def active_expire_cycle(sample: 20)
         @mutex.synchronize do
           now = @clock.call
           evicted = 0
-          @expires.keys.first(sample).each do |key|
+          @expires.keys.sample(sample).each do |key|
             entry = @entries[key]
             next unless entry&.expired?(now)
 
