@@ -2,6 +2,7 @@
 
 require "rediscraft/application/response"
 require "rediscraft/application/command_registry"
+require "rediscraft/domain/store"
 
 module Rediscraft
   module Application
@@ -35,9 +36,19 @@ module Rediscraft
           execute_persist(parts)
         when "INFO"
           execute_info(parts)
+        when "LPUSH"
+          execute_push(parts, side: :left)
+        when "RPUSH"
+          execute_push(parts, side: :right)
+        when "LLEN"
+          execute_llen(parts)
+        when "LRANGE"
+          execute_lrange(parts)
         else
           Response.error("ERR unknown command")
         end
+      rescue Rediscraft::Domain::TypeMismatch
+        wrong_type_error
       end
 
       def apply_durable(record)
@@ -59,7 +70,17 @@ module Rediscraft
           return nil unless record.length == 2
 
           Response.integer(@store.persist(record[1]))
+        when "LPUSH"
+          return nil unless record.length >= 3
+
+          Response.integer(@store.list_push(record[1], record[2..], side: :left))
+        when "RPUSH"
+          return nil unless record.length >= 3
+
+          Response.integer(@store.list_push(record[1], record[2..], side: :right))
         end
+      rescue Rediscraft::Domain::TypeMismatch
+        wrong_type_error
       rescue ArgumentError
         nil
       end
@@ -110,6 +131,26 @@ module Rediscraft
         summary = @store.keyspace_summary
 
         Response.bulk("keys:#{summary[:keys]}\nkeys_with_expiry:#{summary[:keys_with_expiry]}")
+      end
+
+      def execute_push(parts, side:)
+        Response.integer(@store.list_push(parts[1], parts[2..], side: side))
+      end
+
+      def execute_llen(parts)
+        Response.integer(@store.list_length(parts[1]))
+      end
+
+      def execute_lrange(parts)
+        start = Integer(parts[2], 10)
+        stop = Integer(parts[3], 10)
+        Response.array(@store.list_range(parts[1], start, stop))
+      rescue ArgumentError
+        Response.error("ERR value is not an integer or out of range")
+      end
+
+      def wrong_type_error
+        Response.error("WRONGTYPE Operation against a key holding the wrong kind of value")
       end
     end
   end

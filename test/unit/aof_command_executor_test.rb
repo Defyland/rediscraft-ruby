@@ -103,7 +103,7 @@ class AofCommandExecutorTest < Minitest::Test
       path = File.join(dir, "rediscraft.aof")
       now = Time.utc(2026, 1, 1, 12, 0, 0)
       registry = Rediscraft::Application::CommandRegistry
-      covered_commands = %w[SET DEL EXPIRE PERSIST]
+      covered_commands = %w[SET DEL EXPIRE PERSIST LPUSH RPUSH]
       store = Rediscraft::Domain::Store.new(clock: -> { now })
       inner = Rediscraft::Application::CommandExecutor.new(store: store)
       aof = Rediscraft::Infrastructure::AofLog.new(path: path)
@@ -123,6 +123,8 @@ class AofCommandExecutorTest < Minitest::Test
       executor.execute(["SET", "persistent", "value"])
       executor.execute(["EXPIRE", "persistent", "60"])
       executor.execute(["PERSIST", "persistent"])
+      executor.execute(["RPUSH", "queue", "a", "b"])
+      executor.execute(["LPUSH", "queue", "z"])
 
       replayed_store = Rediscraft::Domain::Store.new(clock: -> { now })
       aof.replay(Rediscraft::Application::CommandExecutor.new(store: replayed_store))
@@ -133,6 +135,27 @@ class AofCommandExecutorTest < Minitest::Test
       assert_equal 60, replayed_store.ttl("session")
       assert_equal "value", replayed_store.get("persistent")
       assert_equal(-1, replayed_store.ttl("persistent"))
+      assert_equal %w[z a b], replayed_store.list_range("queue", 0, -1)
+    end
+  end
+
+  def test_compaction_rebuilds_lists
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "rediscraft.aof")
+      store = Rediscraft::Domain::Store.new
+      inner = Rediscraft::Application::CommandExecutor.new(store: store)
+      aof = Rediscraft::Infrastructure::AofLog.new(path: path)
+      executor = Rediscraft::Application::AofCommandExecutor.new(inner: inner, aof: aof)
+
+      executor.execute(["RPUSH", "queue", "a"])
+      executor.execute(["RPUSH", "queue", "b"])
+      executor.execute(["LPUSH", "queue", "z"])
+      executor.compact
+
+      replayed = Rediscraft::Domain::Store.new
+      aof.replay(Rediscraft::Application::CommandExecutor.new(store: replayed))
+
+      assert_equal %w[z a b], replayed.list_range("queue", 0, -1)
     end
   end
 

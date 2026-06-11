@@ -15,6 +15,10 @@ module Rediscraft
         new(status: :ok, payload: payload, kind: :integer)
       end
 
+      def self.array(payload)
+        new(status: :ok, payload: payload, kind: :array)
+      end
+
       def self.error(payload)
         new(status: :error, payload: payload, kind: :error)
       end

@@ -3,9 +3,12 @@
 module Rediscraft
   module Application
     class CommandRegistry
+      # arity is an Integer for a fixed arity or a Range for a variadic one, so
+      # `arity === parts.length` checks both: Integer#=== is equality, Range#=== is
+      # membership. Variadic commands like LPUSH use an endless range (3..).
       Spec = Data.define(:name, :arity, :durable) do
         def valid_arity?(parts)
-          parts.length == arity
+          arity === parts.length
         end
       end
 
@@ -18,7 +21,11 @@ module Rediscraft
         Spec.new(name: "EXPIRE", arity: 3, durable: true),
         Spec.new(name: "TTL", arity: 2, durable: false),
         Spec.new(name: "PERSIST", arity: 2, durable: true),
-        Spec.new(name: "INFO", arity: 1, durable: false)
+        Spec.new(name: "INFO", arity: 1, durable: false),
+        Spec.new(name: "LPUSH", arity: (3..), durable: true),
+        Spec.new(name: "RPUSH", arity: (3..), durable: true),
+        Spec.new(name: "LLEN", arity: 2, durable: false),
+        Spec.new(name: "LRANGE", arity: 4, durable: false)
       ].each_with_object({}) { |spec, specs| specs[spec.name] = spec }.freeze
 
       def self.public_names
@@ -48,7 +55,7 @@ module Rediscraft
         return nil unless spec.valid_arity?(parts)
 
         case spec.name
-        when "SET", "DEL", "PERSIST"
+        when "SET", "DEL", "PERSIST", "LPUSH", "RPUSH"
           parts
         when "EXPIRE"
           ttl_seconds = parse_non_negative_integer(parts[2])

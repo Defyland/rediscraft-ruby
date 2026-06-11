@@ -40,7 +40,12 @@ module Rediscraft
       end
 
       def records_for(entry)
-        records = [["SET", entry[:key], entry[:value]]]
+        value = entry[:value]
+        records = if value.is_a?(Array)
+          [["RPUSH", entry[:key], *value]]
+        else
+          [["SET", entry[:key], value]]
+        end
         records << ["EXPIREAT", entry[:key], entry[:expires_at].to_f.to_s] unless entry[:expires_at].nil?
         records
       end

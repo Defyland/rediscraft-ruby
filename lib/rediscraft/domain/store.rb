@@ -5,6 +5,10 @@ require "rediscraft/domain/entry"
 
 module Rediscraft
   module Domain
+    # Raised when a command meets a key holding a different type, e.g. a list
+    # command on a string key. The application layer turns it into WRONGTYPE.
+    class TypeMismatch < StandardError; end
+
     class Store
       def initialize(clock: -> { Time.now })
         @clock = clock
@@ -34,7 +38,36 @@ module Rediscraft
       def get(key)
         @mutex.synchronize do
           entry = live_entry_for(key)
-          entry&.value
+          return nil if entry.nil?
+          raise TypeMismatch if entry.value.is_a?(Array)
+
+          entry.value
+        end
+      end
+
+      def list_push(key, values, side:)
+        @mutex.synchronize do
+          entry = live_entry_for(key)
+          list = entry.nil? ? [] : string_list!(entry)
+          list = side == :left ? values.reverse + list : list + values
+          store_entry(key, Entry.new(value: list, expires_at: entry&.expires_at))
+          list.length
+        end
+      end
+
+      def list_length(key)
+        @mutex.synchronize do
+          entry = live_entry_for(key)
+          entry.nil? ? 0 : string_list!(entry).length
+        end
+      end
+
+      def list_range(key, start, stop)
+        @mutex.synchronize do
+          entry = live_entry_for(key)
+          return [] if entry.nil?
+
+          slice_range(string_list!(entry), start, stop)
         end
       end
 
@@ -127,6 +160,23 @@ module Rediscraft
       end
 
       private
+
+      def string_list!(entry)
+        raise TypeMismatch unless entry.value.is_a?(Array)
+
+        entry.value
+      end
+
+      # Redis LRANGE semantics: inclusive bounds, negative indexes count from the
+      # end, and out-of-range bounds clamp rather than error.
+      def slice_range(list, start, stop)
+        length = list.length
+        from = start.negative? ? [length + start, 0].max : start
+        to = stop.negative? ? length + stop : [stop, length - 1].min
+        return [] if from > to || from >= length
+
+        list[from..to] || []
+      end
 
       # The only two methods that touch @entries directly, so the counters can
       # never drift: every code path mutates the keyspace through them.

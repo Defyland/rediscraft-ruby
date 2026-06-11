@@ -124,6 +124,36 @@ class CommandExecutorTest < Minitest::Test
     assert_equal "keys:1\nkeys_with_expiry:0", @executor.execute(["INFO"]).payload
   end
 
+  def test_list_push_length_and_range
+    assert_equal 1, @executor.execute(["RPUSH", "items", "a"]).payload
+    assert_equal 3, @executor.execute(["RPUSH", "items", "b", "c"]).payload
+    assert_equal 4, @executor.execute(["LPUSH", "items", "z"]).payload
+    assert_equal 4, @executor.execute(["LLEN", "items"]).payload
+
+    response = @executor.execute(["LRANGE", "items", "0", "-1"])
+    assert_equal :array, response.kind
+    assert_equal %w[z a b c], response.payload
+
+    assert_equal %w[a b], @executor.execute(["LRANGE", "items", "1", "2"]).payload
+  end
+
+  def test_list_commands_reject_string_keys_and_vice_versa
+    @executor.execute(["SET", "s", "v"])
+    wrong = @executor.execute(["RPUSH", "s", "x"])
+    assert_equal :error, wrong.status
+    assert_includes wrong.payload, "WRONGTYPE"
+
+    @executor.execute(["RPUSH", "l", "x"])
+    wrong_get = @executor.execute(["GET", "l"])
+    assert_equal :error, wrong_get.status
+    assert_includes wrong_get.payload, "WRONGTYPE"
+  end
+
+  def test_llen_and_lrange_on_missing_key
+    assert_equal 0, @executor.execute(["LLEN", "missing"]).payload
+    assert_equal [], @executor.execute(["LRANGE", "missing", "0", "-1"]).payload
+  end
+
   def test_expire_at_is_not_a_public_command
     response = @executor.execute(["EXPIREAT", "session", "1767268860"])
 
