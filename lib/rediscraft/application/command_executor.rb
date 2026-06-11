@@ -51,38 +51,17 @@ module Rediscraft
         wrong_type_error
       end
 
+      # Apply a durable record, on replay and on the live AOF write path. Every
+      # public command routes back through `execute`, so a command's effect and
+      # its reply have a single source of truth: there is no second dispatch that
+      # could silently disagree with the live one. EXPIREAT is the one record the
+      # public dispatch does not know -- it is the internal, absolute-instant form
+      # of EXPIRE, carrying the moment computed when EXPIRE first ran so replay
+      # reproduces the exact expiry instead of recomputing it from a fresh clock.
       def apply_durable(record)
-        case record.first
-        when "SET"
-          return nil unless record.length == 3
+        return apply_expire_at(record) if record.first == "EXPIREAT"
 
-          @store.set(record[1], record[2])
-          Response.simple("OK")
-        when "DEL"
-          return nil unless record.length == 2
-
-          Response.integer(@store.delete(record[1]))
-        when "EXPIREAT"
-          return nil unless record.length == 3
-
-          Response.integer(@store.expire_at(record[1], Time.at(Float(record[2])).utc))
-        when "PERSIST"
-          return nil unless record.length == 2
-
-          Response.integer(@store.persist(record[1]))
-        when "LPUSH"
-          return nil unless record.length >= 3
-
-          Response.integer(@store.list_push(record[1], record[2..], side: :left))
-        when "RPUSH"
-          return nil unless record.length >= 3
-
-          Response.integer(@store.list_push(record[1], record[2..], side: :right))
-        end
-      rescue Rediscraft::Domain::TypeMismatch
-        wrong_type_error
-      rescue ArgumentError
-        nil
+        execute(record)
       end
 
       def snapshot
@@ -147,6 +126,14 @@ module Rediscraft
         Response.array(@store.list_range(parts[1], start, stop))
       rescue ArgumentError
         Response.error("ERR value is not an integer or out of range")
+      end
+
+      def apply_expire_at(record)
+        return nil unless record.length == 3
+
+        Response.integer(@store.expire_at(record[1], Time.at(Float(record[2])).utc))
+      rescue ArgumentError
+        nil
       end
 
       def wrong_type_error
