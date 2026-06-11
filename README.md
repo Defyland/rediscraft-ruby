@@ -86,9 +86,12 @@ TCP request handling, concurrent clients, and AOF replay.
 
 ## 12. Performance benchmarks
 
-Performance work is intentionally deferred until the protocol and durability
-rules are stable. Benchmark methodology is documented in
-[docs/benchmarks/methodology.md](docs/benchmarks/methodology.md).
+A stdlib-only closed-loop harness ([`benchmarks/bench.rb`](benchmarks/bench.rb))
+measures throughput, latency percentiles, and server memory. Methodology (and
+what it deliberately does not measure) is in
+[docs/benchmarks/methodology.md](docs/benchmarks/methodology.md); collected
+numbers, including the O(1) `INFO` before/after, are in
+[benchmarks/baseline.md](benchmarks/baseline.md).
 
 ## 13. Observability
 
@@ -139,6 +142,8 @@ benchmark measures (and what it deliberately does not), and
 - A partial trailing AOF record is ignored during replay.
 - Expired keys are removed lazily on access and actively on a background cron tick.
 - A TCP client disconnect closes only that connection in the event loop.
+- An unexpected error while serving one connection (e.g. an AOF append on a full
+  disk) drops only that connection; the reactor logs it and keeps serving the rest.
 - A client that will not read its replies is dropped once its write backlog passes
   the cap.
 - An acknowledged write survives a process crash (validated) but power-loss
@@ -151,4 +156,5 @@ benchmark measures (and what it deliberately does not), and
 - Add auto-compaction by growth ratio on top of the existing manual compaction.
 - Expand RESP compatibility and add protocol negotiation only if it teaches a
   concrete boundary lesson.
-- Add simple benchmarks for throughput and memory growth.
+- Add a bounded keyspace with `maxmemory` and an eviction policy.
+- Add primary/replica replication over the durable-command stream.
