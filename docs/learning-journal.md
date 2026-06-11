@@ -751,6 +751,8 @@ replayavel.
 | `46a3885` | Chave com TTL nunca lida vazava memoria | Ciclo de expiracao ativa limitado por amostra | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
 | `c097128` | Expiracao ativa precisava rodar sob carga | Cron tick a ~10Hz no event loop | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/check` |
 | `d39df76` | Testes deterministicos nao cobriam entrada arbitraria | Fuzz afirma totalidade de `consume` em 20k inputs | `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/check` |
+| `e15b212` | So existia o tipo string | Listas (`LPUSH`/`RPUSH`/`LLEN`/`LRANGE`) com tipo, `WRONGTYPE` e durabilidade | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
+| `f3de935` | Faltava formatar arrays no fio | `:array` formatado em RESP2 e no protocolo textual | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -791,9 +793,9 @@ journal deve registrar por que o gauge veio antes do contador.
 ## 12. Limites de producao deixados fora
 
 Sem auth, TLS, ACL, RESP completo, snapshots binarios, replicacao, clustering,
-limite de conexoes, `maxmemory` com eviction, tipos alem de string (listas, hashes,
-sets), metricas completas (Prometheus/tracing), auto-compaction por razao de
-crescimento e paralelismo de comandos (o event loop e single-threaded, como o Redis
+limite de conexoes, `maxmemory` com eviction, tipos alem de string e listas
+(hashes, sets, sorted sets), metricas completas (Prometheus/tracing),
+auto-compaction por razao de crescimento e paralelismo de comandos (o event loop e single-threaded, como o Redis
 classico: um comando CPU-bound trava o loop). Ja existem, em forma de estudo: event
 loop com `IO.select` e cron, `fsync` opcional com `fsync` de diretorio, compaction
 manual, `INFO` O(1), expiracao ativa, limite de buffer de escrita por conexao,
@@ -1425,3 +1427,45 @@ sequencia de bytes ele devolve `[parts, rest]`, devolve `nil` (incompleto) ou le
 sinal forte de que o parser trata lixo arbitrario com graca. Onde o teste
 deterministico diz "esse caso funciona", o fuzz diz "nenhum caso quebra de um jeito
 que eu nao previ" -- uma garantia diferente, e mais dificil de obter com exemplos.
+
+## 19. Nota tecnica detalhada: o segundo tipo (listas)
+
+Ate aqui todo valor era string. Adicionar listas (`LPUSH`, `RPUSH`, `LLEN`,
+`LRANGE`) e a maior expansao conceitual do projeto, porque introduz a ideia de
+*tipo* numa chave e tudo que decorre dela.
+
+### 19.1 Dispatch por tipo e WRONGTYPE
+
+O `Entry` agora guarda um valor que e String ou Array. Toda operacao precisa
+checar: um comando de lista numa chave string, ou um `GET` numa chave lista, e um
+erro de tipo. O dominio levanta `Domain::TypeMismatch`; a aplicacao o traduz em
+`-WRONGTYPE Operation against a key holding the wrong kind of value`, a mesma
+mensagem do Redis. A checagem mora no dominio (e ele que conhece a forma do valor),
+e a traducao para resposta mora na aplicacao (e ela que conhece o protocolo de
+erro). O `rescue` fica no `execute`, cobrindo qualquer comando que toque o store.
+
+### 19.2 Aridade variadica sem inchar o contrato
+
+`LPUSH key v1 v2 ...` tem aridade variavel, enquanto os comandos antigos tinham
+aridade fixa. Em vez de adicionar um campo `variadic` a todos os specs, a `arity`
+passou a ser um Integer (fixo) ou um Range (variadico), e a checagem virou
+`arity === parts.length`. Isso funciona para os dois porque `Integer#===` e
+igualdade e `Range#===` e pertinencia: `3 === 5` e falso, `(3..) === 5` e
+verdadeiro. Nenhum spec antigo mudou; `LPUSH` usa `(3..)`.
+
+### 19.3 Listas e a fronteira de durabilidade
+
+Listas sao um tipo duravel, entao `LPUSH`/`RPUSH` entram no AOF e precisam ser
+reconstruiveis. Duas pecas: o `apply_durable` ganhou os dois comandos, e a
+compaction passou a emitir `RPUSH key v1 v2 ...` para um valor Array, em vez de
+`SET`, para reconstruir a lista a partir do snapshot.
+
+Um detalhe sutil de WAL apareceu aqui. Para `EXPIRE`, o decorator valida o argumento
+antes de gravar, entao um comando invalido nunca entra no AOF. Para um `LPUSH` numa
+chave string, o erro de tipo so e descoberto na hora de aplicar, depois do append.
+A escolha foi deixar `apply_durable` resgatar `TypeMismatch` e devolver o WRONGTYPE:
+ao vivo, o cliente ve o erro e o store nao muda; no replay, o mesmo registro levanta
+`TypeMismatch`, e tambem resgatado, e vira no-op. O registro "ruim" no AOF e inofensivo
+porque os dois lados o tratam igual, mantendo estado vivo e reconstruido identicos.
+E o mesmo tipo de no-op que um `DEL` em chave ausente ja gerava: o AOF nao e um
+registro so de efeitos, e isso e aceito e documentado.

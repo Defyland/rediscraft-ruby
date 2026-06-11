@@ -22,7 +22,8 @@ operability fundamentals. The repository is not a Redis replacement.
 
 - Text protocol over TCP, plus RESP2 as an alternate protocol adapter.
 - Commands: `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`,
-  `INFO`, and `QUIT`.
+  `INFO`, `LPUSH`, `RPUSH`, `LLEN`, `LRANGE`, and `QUIT`.
+- Two value types: strings and lists, with `WRONGTYPE` errors across them.
 - Single-threaded event-loop server (`IO.select`, `TCP_NODELAY`, bounded
   per-connection write buffer) over a thread-safe in-memory store.
 - Lazy and active TTL expiration, deterministic between live execution and AOF
