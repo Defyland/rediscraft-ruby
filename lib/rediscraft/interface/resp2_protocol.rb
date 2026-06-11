@@ -30,6 +30,7 @@ module Rediscraft
           return bulk(response.payload) if response.kind == :bulk
           return ":#{response.payload}#{CRLF}" if response.kind == :integer
           return "+#{response.payload}#{CRLF}" if response.kind == :simple
+          return array(response.payload) if response.kind == :array
         end
 
         bulk(response)
@@ -115,6 +116,10 @@ module Rediscraft
       def bulk(value)
         string = value.to_s
         "$#{string.bytesize}#{CRLF}#{string}#{CRLF}"
+      end
+
+      def array(elements)
+        "*#{elements.length}#{CRLF}#{elements.map { |element| bulk(element) }.join}"
       end
     end
   end

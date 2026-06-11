@@ -39,4 +39,10 @@ class TextProtocolTest < Minitest::Test
   def test_consume_returns_nil_until_a_newline_arrives
     assert_nil @protocol.consume("PIN")
   end
+
+  def test_formats_array_as_count_then_bulk_lines
+    response = Rediscraft::Application::Response.array(%w[z ab])
+
+    assert_equal "*2\n$1 z\n$2 ab\n", @protocol.format(response)
+  end
 end

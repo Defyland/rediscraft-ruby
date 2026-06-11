@@ -140,6 +140,27 @@ class TcpServerTest < Minitest::Test
     thread&.join(1)
   end
 
+  def test_handles_list_commands_over_resp2
+    resp_server = build_server(protocol: Rediscraft::Interface::Resp2Protocol.new)
+    thread = Thread.new { resp_server.start }
+    sleep 0.05 until resp_server.port
+    socket = TCPSocket.new("127.0.0.1", resp_server.port)
+
+    socket.write("*4\r\n$5\r\nRPUSH\r\n$1\r\nq\r\n$1\r\na\r\n$1\r\nb\r\n")
+    assert_equal ":2\r\n", socket.gets
+
+    socket.write("*4\r\n$6\r\nLRANGE\r\n$1\r\nq\r\n$1\r\n0\r\n$2\r\n-1\r\n")
+    assert_equal "*2\r\n", socket.gets
+    assert_equal "$1\r\n", socket.gets
+    assert_equal "a\r\n", socket.gets
+    assert_equal "$1\r\n", socket.gets
+    assert_equal "b\r\n", socket.gets
+  ensure
+    socket&.close
+    resp_server&.stop
+    thread&.join(1)
+  end
+
   def test_reports_resp2_protocol_errors_over_tcp
     resp_server = build_server(protocol: Rediscraft::Interface::Resp2Protocol.new)
     thread = Thread.new { resp_server.start }

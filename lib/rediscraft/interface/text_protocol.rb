@@ -40,6 +40,7 @@ module Rediscraft
         return "$-1\n" if response.kind == :bulk && response.payload.nil?
         return bulk(response.payload) if response.kind == :bulk
         return ":#{response.payload}\n" if response.kind == :integer
+        return array(response.payload) if response.kind == :array
 
         "+#{response.payload}\n"
       end
@@ -49,6 +50,10 @@ module Rediscraft
       def bulk(value)
         string = value.to_s
         "$#{string.bytesize} #{string}\n"
+      end
+
+      def array(elements)
+        "*#{elements.length}\n#{elements.map { |element| bulk(element) }.join}"
       end
     end
   end

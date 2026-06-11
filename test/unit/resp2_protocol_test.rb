@@ -85,6 +85,12 @@ class Resp2ProtocolTest < Minitest::Test
     end
   end
 
+  def test_formats_array_of_bulk_strings
+    assert_equal "*2\r\n$1\r\nz\r\n$2\r\nab\r\n",
+      @protocol.format(Rediscraft::Application::Response.array(%w[z ab]))
+    assert_equal "*0\r\n", @protocol.format(Rediscraft::Application::Response.array([]))
+  end
+
   def test_formats_application_responses
     assert_equal "+PONG\r\n", @protocol.format(Rediscraft::Application::Response.simple("PONG"))
     assert_equal "$3\r\nAda\r\n", @protocol.format(Rediscraft::Application::Response.bulk("Ada"))
