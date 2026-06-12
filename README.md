@@ -25,7 +25,7 @@ operability fundamentals. The repository is not a Redis replacement.
   `INFO`, `LPUSH`, `RPUSH`, `LLEN`, `LRANGE`, and `QUIT`.
 - Two value types: strings and lists, with `WRONGTYPE` errors across them.
 - Single-threaded event-loop server (`IO.select`, `TCP_NODELAY`, bounded
-  per-connection write buffer) over a thread-safe in-memory store.
+  per-connection read and write buffers) over a thread-safe in-memory store.
 - Lazy and active TTL expiration, deterministic between live execution and AOF
   replay.
 - Append-only file persistence with replay on startup, optional `fsync` (data and
@@ -150,6 +150,8 @@ benchmark measures (and what it deliberately does not), and
   disk) drops only that connection; the reactor logs it and keeps serving the rest.
 - A client that will not read its replies is dropped once its write backlog passes
   the cap.
+- A client that streams an oversized incomplete request is rejected before unread
+  bytes can grow without bound.
 - An acknowledged write survives a process crash (validated) but power-loss
   durability depends on `fsync` (reasoned, not testable in-process).
 - The server is not safe for untrusted networks.

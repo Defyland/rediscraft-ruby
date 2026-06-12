@@ -317,6 +317,10 @@ The key idea:
 
 - it decides which response kind becomes simple string, error, integer, bulk, or
   array;
+- `nil` is the one explicit sentinel at this boundary and means "null bulk";
+- any other non-`Response` object is a bug in the adapter contract and raises
+  `TypeError` on purpose;
+- a `Response` with an unknown `kind` is also a bug and raises `ArgumentError`;
 - each concrete protocol supplies the final wire bytes.
 
 That split is good because:
@@ -363,10 +367,13 @@ Why `handle_readable` rescues `StandardError`:
 One intentional limitation:
 
 - write buffer has a cap;
-- read buffer still grows until a frame completes or the client disconnects.
+- read buffer has a cap too, so an endless partial frame is dropped instead of
+  growing memory forever;
+- one hot client can still monopolize the loop by draining a very large pipeline
+  before the server yields back to `IO.select`.
 
-That is a good future exercise because it is a real boundary problem, not a style
-cleanup.
+That is now the better future exercise because it is a real fairness problem, not
+a memory-leak cleanup.
 
 ## 12. The tests: how to read them
 
@@ -417,8 +424,8 @@ These are the constructs most likely to slow down a reader who is new to Ruby.
 
 ## 14. Three good exercises after reading
 
-1. Add a bounded read buffer and decide where the error belongs: protocol,
-   reactor, or both.
+1. Add a fairness budget in `process_buffer` so one heavily pipelined connection
+   cannot monopolize the loop for too long.
 2. Add a third value type and watch where the current `Array` checks stop scaling.
 3. Add an `INFO` request counter without letting the application layer learn about
    sockets.

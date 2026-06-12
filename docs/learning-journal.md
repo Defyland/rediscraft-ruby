@@ -50,8 +50,9 @@ ordem de leitura no fim da secao.
    ativa, uma chave nunca mais tocada vaza memoria. Veja secao 18; `Store`.
 
 6. **Limites de recurso.** Um servidor honesto se protege de clientes que abusam:
-   um cliente que nao le suas respostas faria o buffer de escrita crescer sem
-   limite. Cap e derrube. Veja secao 18; `TcpServer`.
+   um cliente que nao le suas respostas faz o buffer de escrita crescer; um
+   cliente que nunca termina um frame faz o buffer de leitura crescer. Cap e
+   derrube. Veja secoes 18 e 24; `TcpServer`.
 
 7. **Medir, nao so raciocinar.** Quase toda afirmacao de performance neste journal
    foi, por muito tempo, uma hipotese sem numero. O benchmark existe para
@@ -192,6 +193,24 @@ perguntas de recuperacao com exercicios ancorados em arquivos e testes reais. A
 mudanca e pequena em runtime e grande em pedagogia: menos ilusao de fluencia,
 mais recuperacao ativa e mais honestidade epistemica.
 
+Por fim, uma rodada nova de thermo/sk-ruby voltou a dois temas classicos de
+backend: contrato estrito na borda e limites de recurso simetricos. A revisao
+encontrou um fallback silencioso em `ResponseFormatting`: qualquer objeto que nao
+fosse `Response` virava null bulk, escondendo bug de adapter em vez de falhar
+cedo. Encontrou tambem um buraco de memoria no reactor: o backlog de escrita ja
+tinha teto, mas um cliente podia mandar um frame parcial gigante e fazer o
+`read_buffer` crescer sem limite. A correcao endureceu o formatter (`nil`
+continua sendo null bulk; qualquer outro objeto invalido vira `TypeError`) e
+adicionou `max_read_buffer`, fechando a conexao quando o request incompleto
+ultrapassa o teto.
+
+Uma segunda passada da mesma revisao encontrou um resto do mesmo cheiro no
+formatter compartilhado. Depois de rejeitar objetos que nem `Response` eram, o
+`case` ainda tratava qualquer `kind` desconhecido como simple string pelo ramo
+`else`. Ou seja: um objeto certo por classe, mas errado por semantica, ainda
+virava frame valido. A correcao tornou `:simple` explicito e fez `kind`
+desconhecido levantar `ArgumentError`.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -244,6 +263,23 @@ Erro RESP explicito: escolhido porque um cliente precisa distinguir "servidor
 fechou porque acabou o stream" de "payload malformado". A alternativa rejeitada
 foi manter `nil` como fallback para tudo, porque isso escondia bugs de protocolo
 e tornava troubleshooting pior.
+
+Formatter estrito na borda: escolhido porque converter qualquer objeto
+inesperado em null bulk escondia violacao de contrato exatamente no ponto em que
+ela deveria ficar visivel. A alternativa rejeitada foi manter o fallback
+"defensivo", porque defesa silenciosa aqui mascara bug de adapter em vez de
+proteger o dominio.
+
+Kinds de resposta explicitos no formatter: escolhido porque um `else ->
+simple_frame` reabria o mesmo problema em outro nivel: a classe do objeto estava
+certa, mas o `kind` ainda podia estar errado e mesmo assim sair no fio. A
+alternativa rejeitada foi tratar "qualquer coisa fora de `:error/:bulk/:integer/
+:array`" como simple string por conveniencia.
+
+Limite de buffer de leitura por conexao: escolhido porque limitar so a escrita
+resolve o cliente lento, mas nao o cliente que nunca termina um frame. A
+alternativa rejeitada foi confiar apenas no parser incremental, porque
+incrementalidade sem teto ainda permite exaustao de memoria.
 
 Fechar sockets ativos em `stop`: escolhido porque o servidor ja rastreava
 clientes e precisava completar o lifecycle que iniciou. A alternativa rejeitada
@@ -701,18 +737,22 @@ em chave expirada reporta 0 e que `INFO` reporta gauges de keyspace.
 executor e AOF: nomes publicos, aridade, durabilidade e transformacao de
 `EXPIRE` para `EXPIREAT`, alem do parsing de inteiro nao negativo.
 
-`test/unit/text_protocol_test.rb` protege parsing, tipo de resposta e o `consume`
-incremental por linha (frame completo, rest e frame ainda incompleto).
+`test/unit/text_protocol_test.rb` protege parsing, tipo de resposta, o `consume`
+incremental por linha (frame completo, rest e frame ainda incompleto) e o
+contrato de formatter que aceita so `Response` ou `nil` e rejeita `kind`
+desconhecido.
 
 `test/unit/resp2_protocol_test.rb` protege o parser incremental e o formatter
 RESP2: frame completo com rest, frame parcial como `nil`, bytes do proximo frame
-preservados, null bulk em comando e terminador de bulk malformado como
-`ProtocolError`.
+preservados, null bulk em comando, terminador de bulk malformado como
+`ProtocolError` e o mesmo contrato estrito de formatter da borda textual,
+incluindo `kind` desconhecido.
 
 `test/integration/tcp_server_test.rb` protege conexao TCP real e clientes
 concorrentes no event loop, incluindo comando RESP2 real, erro RESP malformado
 visivel ao cliente, comando fragmentado em dois segmentos TCP, remocao de conexoes
-fechadas do tracking e shutdown que fecha clientes ociosos sem bloquear.
+fechadas do tracking, shutdown que fecha clientes ociosos sem bloquear e o drop
+de request incompleto oversized antes de o buffer de leitura crescer sem limite.
 
 `test/unit/aof_command_executor_test.rb` protege AOF, replay, append antes de
 mutacao, ignorar frame parcial, rejeitar frame com bytes extras, manter contrato
@@ -787,6 +827,9 @@ replayavel.
 | `92a4f82` | Os dois `format` duplicavam o dispatch e ja tinham divergido | `ResponseFormatting` centraliza o roteamento; protocolos so codificam frames | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/unit/text_protocol_test.rb`, `bin/check` |
 | `9e146ce` | O projeto ensinava bem evolucao, mas mal a primeira leitura do codigo atual | `docs/code-walkthrough.md` guia o reader por fluxo, arquivos, funcoes e sintaxe Ruby; README aponta para ele | `bin/check` |
 | `3526cf3` | O journal ainda favorecia leitura passiva e overclaim facil | Outcomes concretos, secao "o que prova/o que nao prova" e perguntas de recuperacao com exercicios ancorados no repo | `bin/check` |
+| `4ee8b1d` | `format` escondia objeto invalido como null bulk | `ResponseFormatting` aceita so `Response` ou `nil`; qualquer outro objeto vira `TypeError` | `ruby -Itest test/unit/text_protocol_test.rb`, `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/check` |
+| `00b9e51` | Cliente podia inflar memoria com frame parcial gigante | `TcpServer` ganhou `max_read_buffer` e derruba request incompleto oversized com erro de protocolo | `ruby -Itest test/integration/tcp_server_test.rb`, `bin/check` |
+| `2044079` | `Response` com `kind` invalido ainda virava simple string pelo `else` | Formatter compartilhado tornou `:simple` explicito e `kind` desconhecido virou `ArgumentError` | `ruby -Itest test/unit/text_protocol_test.rb`, `ruby -Itest test/unit/resp2_protocol_test.rb`, `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -796,12 +839,16 @@ replayavel.
 - Parsing e formato de resposta entram em `Interface`.
 - Novo protocolo deve implementar `consume(buffer)` e `format(response)` sem
   mudar dominio ou aplicacao.
+- Adapter de interface deve falhar cedo quando receber objeto fora do contrato;
+  fallback silencioso aqui mascara bug em vez de proteger a borda.
 - Novo comando publico deve entrar em `CommandRegistry` antes de executor,
   protocolo ou AOF.
 - Novo parser de protocolo deve diferenciar frame incompleto (`nil`, espera mais
   bytes) de frame malformado (`ProtocolError`).
 - O modelo de concorrencia vive so na interface; dominio e aplicacao nao devem
   assumir quantas threads dirigem o servidor.
+- Limites de recurso por conexao devem ser simetricos: se a saida tem cap, a
+  entrada tambem precisa de um teto claro.
 - Novo comando duravel deve atualizar o teste de contrato entre registry, AOF e
   replay.
 - Shutdown de interface externa deve liberar sockets e threads que ela abriu.
@@ -832,8 +879,8 @@ limite de conexoes, `maxmemory` com eviction, tipos alem de string e listas
 auto-compaction por razao de crescimento e paralelismo de comandos (o event loop e single-threaded, como o Redis
 classico: um comando CPU-bound trava o loop). Ja existem, em forma de estudo: event
 loop com `IO.select` e cron, `fsync` opcional com `fsync` de diretorio, compaction
-manual, `INFO` O(1), expiracao ativa, limite de buffer de escrita por conexao,
-`TCP_NODELAY`, um harness de benchmark e um fuzz do parser.
+manual, `INFO` O(1), expiracao ativa, limite de buffer de leitura e escrita por
+conexao, `TCP_NODELAY`, um harness de benchmark e um fuzz do parser.
 
 ## 13. Resultado das revisoes de qualidade
 
@@ -940,6 +987,24 @@ prova, e perguntas de recuperacao com exercicios presos a arquivos reais. O
 objetivo foi trocar leitura confortavel por recuperacao ativa e evitar que o
 reader confunda narracao convincente com evidencia. Evidencia: `bin/check` verde
 com 63 testes e 3550 assertions.
+
+Rodada thermo/sk-ruby de contratos estritos e limites simetricos: a review
+encontrou um fallback silencioso no formatter compartilhado e um furo no limite
+de recurso do reactor. O primeiro fazia `format("oops")` parecer null bulk; o
+segundo deixava um cliente crescer `read_buffer` com um frame parcial gigante. As
+correcoes foram pequenas e no lugar certo: `ResponseFormatting` agora aceita so
+`Response` ou `nil`, e `TcpServer` ganhou `max_read_buffer`, checado depois de
+`process_buffer` para limitar o rabo ainda nao parseado, nao o tamanho bruto do
+ultimo `read_nonblock`. Evidencia: `bin/check` verde com 66 testes e 3554
+assertions.
+
+Segunda passada da mesma rodada: a primeira correcao endureceu a classe do
+objeto, mas ainda faltava endurecer a semantica do `Response`. O `case` de
+`ResponseFormatting` ainda fazia `else -> simple_frame`, entao um
+`Response.new(kind: :mystery, ...)` produzia um frame valido em vez de falhar. A
+correcao tornou `:simple` um ramo explicito e trocou o `else` por
+`ArgumentError`, fechando o ultimo fallback silencioso desse adapter.
+Evidencia: `bin/check` verde com 68 testes e 3556 assertions.
 
 ## 14. Nota tecnica detalhada: rodada de serializacao AOF e limpeza
 
@@ -1830,16 +1895,21 @@ real.
    Confira o comentario em `lib/rediscraft/application/command_registry.rb`.
 8. Qual e o unico registro duravel que o dispatch publico nao conhece?
    Confira `CommandExecutor#apply_durable`.
+9. Por que `format(nil)` pode ser correto, mas `format("oops")` deve explodir?
+   Confira `lib/rediscraft/interface/response_formatting.rb`.
+10. Por que `Response.new(kind: :mystery, ...)` deve explodir, em vez de sair
+    como simple string?
+    Confira `lib/rediscraft/interface/response_formatting.rb`.
 
 ### 23.2 Exercicios guiados no repo
 
-1. **Bounded read buffer.**
-   Objetivo: impedir que um cliente envie um frame incompleto gigante e cresca
-   memoria sem limite.
+1. **Budget de justica por tick no reactor.**
+   Objetivo: impedir que um cliente com pipeline enorme monopolize o loop por
+   muito tempo, mesmo com caps de leitura e escrita.
    Arquivos de partida: `lib/rediscraft/interface/tcp_server.rb`,
    `test/integration/tcp_server_test.rb`.
-   Criterio de sucesso: a conexao e fechada ou recebe erro antes de o buffer de
-   leitura crescer indefinidamente, e os testes atuais continuam verdes.
+   Criterio de sucesso: o loop volta a servir outros sockets depois de um numero
+   limitado de frames por tick, sem quebrar pipelining nem os testes atuais.
 
 2. **Contador de requests em `INFO`.**
    Objetivo: adicionar observabilidade sem fazer a aplicacao aprender sobre
@@ -1862,4 +1932,75 @@ Voce provavelmente entendeu o repo em nivel bom quando consegue fazer, sem olhar
 - desenhar o fluxo de um `SET` do socket ao store e de volta;
 - explicar por que `EXPIRE` vira `EXPIREAT` no AOF;
 - explicar por que um comando O(N) vira requisito num reactor single-threaded;
+- explicar por que `format(nil)` e um caso deliberado, mas `format(objeto_qualquer)`
+  e violacao de contrato;
 - citar um teste que prova comportamento e um limite que o mesmo teste nao prova.
+
+## 24. Nota tecnica detalhada: rodada thermo/sk-ruby de contratos estritos e limites simetricos
+
+Esta rodada foi pequena em diff e grande em criterio. Os dois achados tinham a
+mesma raiz: a borda da interface estava sendo mais tolerante do que deveria.
+
+### 24.1 `ResponseFormatting`: duck typing nao e desculpa para contrato vago
+
+Depois que `ResponseFormatting` centralizou o dispatch entre protocolos, a
+intencao do codigo ficou melhor: um lugar decide que `:bulk` vira bulk, `:error`
+vira erro, `:integer` vira inteiro, e assim por diante. Mas ainda havia um
+residuo perigoso da fase anterior: qualquer objeto que nao fosse `Response`
+caia no mesmo caminho de `nil` e virava null bulk.
+
+Esse comportamento parecia "defensivo", mas era o oposto. `nil` aqui tem
+significado de protocolo: ausencia explicita de valor. `"oops"`, `[]` ou um
+objeto qualquer nao sao ausencia de valor; sao violacao de contrato entre
+adapter e aplicacao. Ao transformar tudo isso em null bulk, a borda escondia o
+erro e treinava os testes a aceitarem um estado mentiroso.
+
+A correcao foi manter um unico caso especial legitimo (`nil`) e fazer o resto
+falhar cedo com `TypeError`. Isso e Ruby idiomatico no ponto certo: duck typing
+serve para permitir colaboracoes pequenas e claras, nao para fingir que qualquer
+objeto serve quando o protocolo exige um `Response`.
+
+Na segunda passada da mesma rodada apareceu o resto do mesmo problema, agora
+dentro de um `Response` de verdade. O `case` do formatter ainda fazia `else ->
+simple_frame(response.payload)`. Na pratica, isso queria dizer que
+`Response.new(status: :ok, payload: "x", kind: :mystery)` ainda gerava resposta
+valida no fio. O objeto passava no filtro de classe, mas a semantica dele seguia
+errada.
+
+A correcao final foi a mesma filosofia em um nivel mais fundo: `:simple` virou
+ramo explicito, e o `else` passou a levantar `ArgumentError`. Agora o adapter
+falha cedo tanto quando o objeto inteiro esta errado quanto quando o objeto e da
+classe certa, mas com estado semantico invalido.
+
+### 24.2 O detalhe importante do `max_read_buffer`: medir o rabo, nao o lote
+
+Adicionar um teto para `read_buffer` parece obvio, mas havia uma escolha de
+local da checagem. Se o servidor verificasse o tamanho logo depois do
+`read_nonblock`, um unico syscall que trouxesse varios frames completos poderia
+ultrapassar o teto "bruto" e ainda assim ser perfeitamente valido: o parser
+consumiria quase tudo no mesmo tick.
+
+Por isso a checagem acontece depois de `process_buffer(conn)`. O teto passa a
+medir o que realmente importa: quantos bytes *ainda nao parseados* sobraram na
+conexao depois de drenar tudo o que ja era frame completo. Em outras palavras, o
+cap protege contra "frame parcial sem fim", nao contra "kernel me entregou um
+lote grande de bytes uteis".
+
+Isso tambem explica a forma do teste de integracao. Do lado do cliente, o efeito
+visivel de um close por erro de protocolo pode aparecer como `-ERR protocol
+error` ou `ECONNRESET`, dependendo do timing do kernel. O contrato importante nao
+e qual dessas duas superficies a stack local mostrou, e sim que a conexao foi
+derrubada e o servidor nao manteve crescimento ilimitado de memoria naquela
+conexao.
+
+### 24.3 O que esta rodada deliberadamente nao tentou resolver
+
+Dois temas ficaram conscientemente fora.
+
+- **Justica do reactor.** Com caps de leitura e escrita, o buraco de memoria foi
+  fechado. Ainda assim, um cliente com pipeline muito grande pode consumir muitos
+  frames antes de o loop voltar ao `IO.select`. Isso e problema de fairness, nao
+  de resource leak, e agora virou o melhor exercicio seguinte.
+- **Contabilidade global de memoria ou limite de conexoes.** O achado provava um
+  problema local por conexao. Trocar isso por um desenho de cota global, LRU ou
+  admission control nesta rodada seria aumentar demais o escopo e diluir a licao.
