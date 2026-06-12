@@ -205,6 +205,28 @@ class TcpServerTest < Minitest::Test
     thread&.join(1)
   end
 
+  def test_rejects_a_client_with_an_oversized_incomplete_request_buffer
+    capped_server = build_server(max_read_buffer: 1024)
+    thread = Thread.new { capped_server.start }
+    sleep 0.05 until capped_server.port
+    socket = TCPSocket.new("127.0.0.1", capped_server.port)
+
+    socket.write("SET huge #{'x' * 5000}")
+
+    first_observation = begin
+      socket.gets
+    rescue Errno::ECONNRESET
+      :reset
+    end
+
+    assert_includes ["-ERR protocol error\n", :reset], first_observation
+    wait_until(timeout: 2) { capped_server.tracked_client_count.zero? }
+  ensure
+    socket&.close
+    capped_server&.stop
+    thread&.join(1)
+  end
+
   def test_an_unexpected_executor_error_drops_only_that_connection
     boom_executor = Object.new
     def boom_executor.execute(parts)
@@ -239,15 +261,17 @@ class TcpServerTest < Minitest::Test
 
   private
 
-  def build_server(protocol:)
+  def build_server(protocol: Rediscraft::Interface::TextProtocol.new, max_read_buffer: nil)
     store = Rediscraft::Domain::Store.new
     executor = Rediscraft::Application::CommandExecutor.new(store: store)
-    Rediscraft::Interface::TcpServer.new(
+    kwargs = {
       host: "127.0.0.1",
       port: 0,
       executor: executor,
       protocol: protocol
-    )
+    }
+    kwargs[:max_read_buffer] = max_read_buffer unless max_read_buffer.nil?
+    Rediscraft::Interface::TcpServer.new(**kwargs)
   end
 
   def wait_until(timeout: 1)

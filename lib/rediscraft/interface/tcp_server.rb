@@ -27,14 +27,20 @@ module Rediscraft
       # per-connection write backlog and drop the connection when it is exceeded,
       # the same defense as Redis client-output-buffer-limit.
       DEFAULT_MAX_WRITE_BUFFER = 16 * 1024 * 1024
+      # A client can also exhaust memory on the read side by streaming an endless
+      # partial frame. Cap the buffered unread request bytes per connection so the
+      # protocol parser has a maximum frame size instead of trusting the peer.
+      DEFAULT_MAX_READ_BUFFER = 16 * 1024 * 1024
 
       def initialize(host:, port:, executor:, protocol: TextProtocol.new,
-                     max_write_buffer: DEFAULT_MAX_WRITE_BUFFER)
+                     max_write_buffer: DEFAULT_MAX_WRITE_BUFFER,
+                     max_read_buffer: DEFAULT_MAX_READ_BUFFER)
         @host = host
         @requested_port = port
         @executor = executor
         @protocol = protocol
         @max_write_buffer = max_write_buffer
+        @max_read_buffer = max_read_buffer
         @connections = {}
         @connections_mutex = Mutex.new
       end
@@ -120,6 +126,7 @@ module Rediscraft
       def read_from(conn)
         conn.read_buffer << conn.socket.read_nonblock(READ_CHUNK)
         process_buffer(conn)
+        raise ProtocolError, "request too large" if conn.read_buffer.bytesize > @max_read_buffer
       rescue IO::WaitReadable
         nil
       rescue EOFError, Errno::ECONNRESET
