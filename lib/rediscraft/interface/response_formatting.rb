@@ -12,7 +12,10 @@ module Rediscraft
     # protocol includes this module and supplies the terminal encoders below.
     module ResponseFormatting
       def format(response)
-        return null_bulk unless response.is_a?(Rediscraft::Application::Response)
+        return null_bulk if response.nil?
+        unless response.is_a?(Rediscraft::Application::Response)
+          raise TypeError, "expected Rediscraft::Application::Response or nil, got #{response.class}"
+        end
 
         case response.kind
         when :error then error_frame(response.payload)

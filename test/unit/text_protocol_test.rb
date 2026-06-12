@@ -18,6 +18,10 @@ class TextProtocolTest < Minitest::Test
     assert_equal "$-1\n", @protocol.format(nil)
   end
 
+  def test_rejects_non_response_objects_instead_of_hiding_them_as_null
+    assert_raises(TypeError) { @protocol.format("oops") }
+  end
+
   def test_formats_errors_with_error_prefix
     response = Rediscraft::Application::Response.error("ERR unknown command")
 

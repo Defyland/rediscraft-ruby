@@ -98,4 +98,8 @@ class Resp2ProtocolTest < Minitest::Test
     assert_equal ":1\r\n", @protocol.format(Rediscraft::Application::Response.integer(1))
     assert_equal "-ERR unknown command\r\n", @protocol.format(Rediscraft::Application::Response.error("ERR unknown command"))
   end
+
+  def test_rejects_non_response_objects_instead_of_hiding_them_as_null
+    assert_raises(TypeError) { @protocol.format("oops") }
+  end
 end
