@@ -22,7 +22,9 @@ module Rediscraft
         when :bulk then response.payload.nil? ? null_bulk : bulk_frame(response.payload)
         when :integer then integer_frame(response.payload)
         when :array then array_frame(response.payload)
-        else simple_frame(response.payload)
+        when :simple then simple_frame(response.payload)
+        else
+          raise ArgumentError, "unknown response kind: #{response.kind.inspect}"
         end
       end
     end

@@ -22,6 +22,12 @@ class TextProtocolTest < Minitest::Test
     assert_raises(TypeError) { @protocol.format("oops") }
   end
 
+  def test_rejects_unknown_response_kinds_instead_of_formatting_them_as_simple
+    response = Rediscraft::Application::Response.new(status: :ok, payload: "oops", kind: :mystery)
+
+    assert_raises(ArgumentError) { @protocol.format(response) }
+  end
+
   def test_formats_errors_with_error_prefix
     response = Rediscraft::Application::Response.error("ERR unknown command")
 

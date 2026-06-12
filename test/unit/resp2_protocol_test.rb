@@ -102,4 +102,10 @@ class Resp2ProtocolTest < Minitest::Test
   def test_rejects_non_response_objects_instead_of_hiding_them_as_null
     assert_raises(TypeError) { @protocol.format("oops") }
   end
+
+  def test_rejects_unknown_response_kinds_instead_of_formatting_them_as_simple
+    response = Rediscraft::Application::Response.new(status: :ok, payload: "oops", kind: :mystery)
+
+    assert_raises(ArgumentError) { @protocol.format(response) }
+  end
 end
