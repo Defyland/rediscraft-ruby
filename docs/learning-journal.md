@@ -5,6 +5,16 @@
 Criar um Redis-like do zero em Ruby para estudar backend em profundidade:
 protocolo, TCP, concorrencia, TTL, persistencia append-only e recovery.
 
+Depois de estudar este repo com calma, o learner deve ser capaz de:
+
+- explicar por que TCP exige framing explicito e por que `consume(buffer)` existe;
+- rastrear um comando do socket ate o store e de volta ao socket;
+- separar o que pertence ao dominio, a aplicacao, a infraestrutura e a interface;
+- explicar append-before-mutate, replay e os niveis de durabilidade (`flush`,
+  `fsync`, `fsync` de diretorio);
+- dizer o que os testes e benchmarks deste repo realmente provam, e o que nao
+  provam.
+
 ## 2. Os conceitos que este projeto ensina (leia primeiro)
 
 Este journal nasceu cronologico: rodada apos rodada de "primeiro fiz assim, depois
@@ -1717,3 +1727,122 @@ O ponto de chegada e mais claro agora:
 - `README`: produto e limites.
 - `docs/code-walkthrough.md`: leitura guiada do codigo atual.
 - `docs/learning-journal.md`: evolucao, revisoes e raciocinio tecnico.
+
+## 22. O que esta historia prova, e o que ela nao prova
+
+Esta secao existe para endurecer a honestidade do material. Um journal util nao
+e o que parece mais confiante; e o que deixa claro o limite da evidencia.
+
+### 22.1 O que este repo prova bem
+
+- **Framing incremental de protocolo.** O par `TextProtocol`/`Resp2Protocol`,
+  mais os testes de parser e os testes TCP reais, provam que o servidor sabe
+  receber bytes parciais, distinguir frame incompleto de frame malformado e
+  responder nos dois protocolos. Veja `lib/rediscraft/interface/*_protocol.rb`,
+  `test/unit/resp2_protocol_test.rb` e `test/integration/tcp_server_test.rb`.
+- **Separacao de camadas pequena, mas real.** O fluxo `protocol -> executor ->
+  store -> protocol` e observavel no codigo de hoje, e os arquivos centrais
+  deixam claro onde cada responsabilidade mora. Veja `CommandExecutor`, `Store`,
+  `AofLog` e `TcpServer`.
+- **Durabilidade contra morte do processo.** O teste
+  `test/integration/crash_recovery_test.rb` prova que um write reconhecido ao
+  cliente sobrevive a `SIGKILL` e volta no replay.
+- **Medicao do custo de complexidade num reactor.** O benchmark e o baseline
+  realmente mostram que um comando O(N) no loop single-threaded degrada todos os
+  clientes, e que o `INFO` O(1) remove esse gargalo para esta carga e nesta
+  maquina. Veja `benchmarks/bench.rb` e `benchmarks/baseline.md`.
+- **Fronteira de erro por conexao.** O reactor atual aguenta a falha inesperada
+  de um cliente sem matar o servidor inteiro. Isso e provado pelos testes
+  adicionados na rodada de endurecimento.
+
+### 22.2 O que este repo nao prova
+
+- **Nao prova durabilidade contra queda de energia.** O teste de crash mata o
+  processo, nao o kernel nem a maquina. `fsync` e `fsync` de diretorio continuam
+  sendo defendidos por raciocinio tecnico, nao por teste local reproduzivel.
+- **Nao prova throughput universal.** Os numeros de benchmark mostram forma e
+  direcao da mudanca nesta maquina, com esta carga e este harness. Eles nao sao
+  promessa de producao.
+- **Nao prova que o desenho atual escala para muitos tipos.** Hoje string e
+  lista cabem bem. O repo ainda nao prova onde a abordagem por `is_a?(Array)`
+  deixa de se pagar, porque o terceiro tipo ainda nao existe.
+- **Nao prova seguranca de producao.** Nao ha auth, TLS, ACL, rate limiting ou
+  isolamento de rede. O projeto afirma o contrario no README e nos limites de
+  producao.
+- **Nao prova intencao privada alem do que o git mostra.** Quando o journal diz
+  "a revisao mostrou" ou "a correcao foi", isso esta ancorado em commits, testes
+  e no estado atual do codigo. Ele nao consegue provar o que alguem pensou e nao
+  registrou.
+
+### 22.3 Como usar essa secao estudando
+
+Quando voce encontrar uma afirmacao forte no repo, tente classifica-la em uma de
+duas caixas:
+
+- "isto esta provado por teste, benchmark, codigo ou ADR";
+- "isto e uma inferencia defensavel, mas nao uma prova".
+
+Fazer essa separacao conscientemente e parte da habilidade de senior que este
+projeto quer ensinar.
+
+## 23. Perguntas de recuperacao e exercicios
+
+Esta secao existe para trocar leitura passiva por recuperacao ativa. Nao olhe a
+resposta de imediato; tente responder de memoria e so depois confira no arquivo
+real.
+
+### 23.1 Perguntas de recuperacao curta
+
+1. Em que metodo o servidor decide que um frame RESP esta incompleto, e nao
+   invalido?
+   Confira em `lib/rediscraft/interface/resp2_protocol.rb`.
+2. Que metodo concentra o contrato publico de nome, aridade e durabilidade dos
+   comandos?
+   Confira em `lib/rediscraft/application/command_registry.rb`.
+3. Que teste prova que um write reconhecido sobrevive a morte do processo?
+   Confira em `test/integration/crash_recovery_test.rb`.
+4. Onde a expiracao preguicosa realmente acontece?
+   Confira em `lib/rediscraft/domain/store.rb`.
+5. Em que ponto o reactor impede que o erro inesperado de um cliente derrube o
+   servidor inteiro?
+   Confira em `lib/rediscraft/interface/tcp_server.rb`.
+6. Que teste protege a garantia de que o replay usa o mesmo caminho de execucao
+   dos comandos publicos?
+   Confira em `test/unit/aof_command_executor_test.rb`.
+7. Por que `CommandRegistry` usa `arity === parts.length` em vez de `==`?
+   Confira o comentario em `lib/rediscraft/application/command_registry.rb`.
+8. Qual e o unico registro duravel que o dispatch publico nao conhece?
+   Confira `CommandExecutor#apply_durable`.
+
+### 23.2 Exercicios guiados no repo
+
+1. **Bounded read buffer.**
+   Objetivo: impedir que um cliente envie um frame incompleto gigante e cresca
+   memoria sem limite.
+   Arquivos de partida: `lib/rediscraft/interface/tcp_server.rb`,
+   `test/integration/tcp_server_test.rb`.
+   Criterio de sucesso: a conexao e fechada ou recebe erro antes de o buffer de
+   leitura crescer indefinidamente, e os testes atuais continuam verdes.
+
+2. **Contador de requests em `INFO`.**
+   Objetivo: adicionar observabilidade sem fazer a aplicacao aprender sobre
+   socket ou replay.
+   Arquivos de partida: `CommandExecutor`, `TcpServer`, `docs/learning-journal.md`.
+   Criterio de sucesso: o incremento acontece uma unica vez por comando recebido
+   da interface externa, nao no replay.
+
+3. **Terceiro tipo de valor.**
+   Objetivo: sentir na pratica em que ponto a estrategia atual por classe Ruby
+   comeca a pedir um tipo explicito.
+   Arquivos de partida: `Store`, `CommandExecutor`, `AofCommandExecutor`, testes.
+   Criterio de sucesso: o novo tipo funciona, `WRONGTYPE` continua correto, e
+   voce consegue apontar exatamente onde a modelagem atual comecou a ficar cara.
+
+### 23.3 Como se autoavaliar
+
+Voce provavelmente entendeu o repo em nivel bom quando consegue fazer, sem olhar:
+
+- desenhar o fluxo de um `SET` do socket ao store e de volta;
+- explicar por que `EXPIRE` vira `EXPIREAT` no AOF;
+- explicar por que um comando O(N) vira requisito num reactor single-threaded;
+- citar um teste que prova comportamento e um limite que o mesmo teste nao prova.
