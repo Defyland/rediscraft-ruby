@@ -184,6 +184,14 @@ Ruby aparece com frequencia. A resposta foi adicionar `docs/code-walkthrough.md`
 como camada didatica separada, sem inflar o journal nem apagar seu papel
 cronologico.
 
+Na sequencia, uma rodada guiada pela skill `teach` endureceu o proprio journal
+como artefato de aprendizagem. O alvo deixou de ser so "explicar bem" e passou a
+ser "o que o learner deve saber fazer depois de estudar isto?". Entraram outcomes
+de aprendizagem, uma secao explicita sobre o que a historia prova ou nao prova, e
+perguntas de recuperacao com exercicios ancorados em arquivos e testes reais. A
+mudanca e pequena em runtime e grande em pedagogia: menos ilusao de fluencia,
+mais recuperacao ativa e mais honestidade epistemica.
+
 ## 4. Decisao por decisao
 
 Ruby stdlib: escolhido para manter o foco em fundamentos. Rejeitado Rails ou
@@ -778,6 +786,7 @@ replayavel.
 | `2754606` | Amostra por ordem de insercao deixava chaves expiradas na sombra | Amostragem aleatoria na expiracao ativa, como o Redis | `ruby -Itest test/unit/command_executor_test.rb`, `bin/check` |
 | `92a4f82` | Os dois `format` duplicavam o dispatch e ja tinham divergido | `ResponseFormatting` centraliza o roteamento; protocolos so codificam frames | `ruby -Itest test/unit/resp2_protocol_test.rb`, `ruby -Itest test/unit/text_protocol_test.rb`, `bin/check` |
 | `9e146ce` | O projeto ensinava bem evolucao, mas mal a primeira leitura do codigo atual | `docs/code-walkthrough.md` guia o reader por fluxo, arquivos, funcoes e sintaxe Ruby; README aponta para ele | `bin/check` |
+| `3526cf3` | O journal ainda favorecia leitura passiva e overclaim facil | Outcomes concretos, secao "o que prova/o que nao prova" e perguntas de recuperacao com exercicios ancorados no repo | `bin/check` |
 
 ## 10. Checklist de boundaries para futuras features
 
@@ -923,6 +932,14 @@ foi criar um guia de leitura do codigo atual, separado, com fluxo de request,
 ordem curta de leitura, funcoes-chave e notas da sintaxe Ruby usada aqui.
 Evidencia: `bin/check` verde com 63 testes e 3550 assertions. O journal passa a
 apontar para esse guia, mas continua sendo a historia cronologica do projeto.
+
+Rodada guiada pela skill `teach`: o passo seguinte nao foi adicionar mais texto
+explicativo, e sim fortalecer aprendizado e honestidade. O journal ganhou
+outcomes concretos no topo, uma secao separando o que o repo prova do que ele nao
+prova, e perguntas de recuperacao com exercicios presos a arquivos reais. O
+objetivo foi trocar leitura confortavel por recuperacao ativa e evitar que o
+reader confunda narracao convincente com evidencia. Evidencia: `bin/check` verde
+com 63 testes e 3550 assertions.
 
 ## 14. Nota tecnica detalhada: rodada de serializacao AOF e limpeza
 
