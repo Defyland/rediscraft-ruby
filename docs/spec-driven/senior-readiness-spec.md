@@ -33,13 +33,15 @@ Authentication, ACLs, TLS, and protected admin surfaces are out of scope.
 
 ## Observability Bar
 
-Observability starts as documentation and testable failure behavior. Metrics are
-planned after the core command path is stable.
+Observability already includes documentation, testable failure behavior, and
+`INFO` keyspace gauges. Request counters and structured metrics remain deferred
+until a shared metrics object justifies the coupling.
 
 ## Performance Bar
 
-Performance is planned through local benchmarks after command semantics and AOF
-replay are implemented.
+Performance now includes a local benchmark harness plus collected baseline
+evidence for GET/SET/MIXED/GET+INFO workloads. Open-loop load testing and AOF-on
+profiles remain future work.
 
 ## Scalability Bar
 
@@ -63,15 +65,17 @@ Tests should read in command language and explain why each behavior matters.
 
 ## Test and CI Bar
 
-Local tests and syntax checks are required in the first slice. CI is planned
-after the repository has a stable command set.
+Local tests, syntax checks, and GitHub Actions running `bin/check` are part of
+the current contract.
 
 ## Evidence Matrix
 
 | Criterion | Evidence | Status | Notes |
 | --- | --- | --- | --- |
 | Product problem is explicit | README.md | Done | Names backend learning as the product problem. |
-| Domain can execute basic commands | test/unit/command_executor_test.rb | Partial | `PING`, `SET`, and `GET` covered first. |
+| Domain can execute the shipped command set | test/unit/command_executor_test.rb | Done | Strings, TTL, `INFO`, and list behavior are covered. |
 | TCP protocol is implemented | test/integration/tcp_server_test.rb | Done | Uses real TCP sockets. |
 | AOF replay is implemented | test/unit/aof_command_executor_test.rb | Done | Includes partial trailing line behavior. |
+| Benchmark evidence exists | benchmarks/baseline.md | Done | Records the `INFO` O(N) stall and O(1) recovery. |
+| CI runs the repository contract | .github/workflows/ci.yml | Done | Executes `bin/check` on pushes and pull requests. |
 | Quality review is recorded | docs/learning-journal.md | Partial | Structural/Ruby review recorded; no external reviewer. |

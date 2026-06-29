@@ -5,15 +5,16 @@
 Rediscraft is a Ruby stdlib Redis-like server on Ruby 3.4.9. It serves a text TCP
 protocol and a RESP2 TCP protocol through a single-threaded event loop
 (`IO.select` with non-blocking sockets and per-connection buffers). It supports
-`PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`, `INFO`, and
-`QUIT`, lazy TTL expiration that is deterministic between live execution and AOF
-replay, append-only persistence with replay, optional `fsync`, and log compaction
-from live state.
+`PING`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`, `INFO`,
+`LPUSH`, `RPUSH`, `LLEN`, `LRANGE`, and `QUIT`, lazy TTL expiration that is
+deterministic between live execution and AOF replay, append-only persistence
+with replay, optional `fsync`, and log compaction from live state.
 
 ## Commands Run
 
 - `bin/test`
 - `bin/check`
+- `ruby benchmarks/bench.rb --clients 8 --ops 3000 --warmup 1000 --keys 50000`
 - Manual smoke test of the running server over TCP (text protocol with AOF).
 
 ## Passing Criteria
@@ -25,11 +26,15 @@ from live state.
   a command split across TCP segments, malformed RESP errors, connection tracking,
   and non-blocking shutdown pass.
 - Syntax checks pass through `bin/check`.
-- Evidence: 49 runs, 116 assertions, 0 failures, 0 errors, 0 skips.
+- GitHub Actions runs `bin/check` on pushes and pull requests.
+- `bin/check` output is authoritative for current run and assertion totals; this
+  report intentionally does not freeze a test count that grows with new
+  commands.
 
 ## Partial Criteria
 
-- Benchmarks are documented but not collected.
+- Benchmarks are collected in [`benchmarks/baseline.md`](../../benchmarks/baseline.md),
+  but remain local loopback/macOS numbers rather than portable throughput claims.
 - `INFO` exposes keyspace gauges (`keys`, `keys_with_expiry`); a request counter
   and full metrics (Prometheus/tracing) are deferred.
 - Compaction is manual (`--compact-on-start`); auto-compaction by growth ratio is

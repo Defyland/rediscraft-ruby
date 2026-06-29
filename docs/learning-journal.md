@@ -2004,3 +2004,22 @@ Dois temas ficaram conscientemente fora.
 - **Contabilidade global de memoria ou limite de conexoes.** O achado provava um
   problema local por conexao. Trocar isso por um desenho de cota global, LRU ou
   admission control nesta rodada seria aumentar demais o escopo e diluir a licao.
+
+## 25. Documentacao tambem e contrato executavel
+
+Quando o repo virou `ready/public`, apareceu um tipo diferente de bug: nao era
+mais um bug de comando nem de socket, e sim de narrativa. Partes do codigo e do
+README ja diziam a verdade atual (`INFO` existe, benchmarks existem, CI existe),
+mas alguns docs de engenharia ainda falavam dessas coisas como se fossem
+futuras.
+
+Esse tipo de deriva parece menor, mas para um revisor e exatamente o contrario.
+Se o case study, o roadmap e o verification report contradizem o que o repo faz
+hoje, a leitura natural e desconfiar do repositorio inteiro. O efeito ruim nao e
+"faltou polimento"; e perda de confianca no contrato tecnico.
+
+A correcao certa nao foi escrever mais marketing. Foi alinhar os docs
+contratuais ao estado real do repo e adicionar um teste pequeno que falha se
+esses artefatos voltarem a descrever features entregues como se ainda estivessem
+planejadas. A licao aqui e simples: benchmark, CI e observabilidade contam como
+especialismo so quando a documentacao publica acompanha a verdade do codigo.

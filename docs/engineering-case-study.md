@@ -19,7 +19,7 @@ The repository uses four boundaries:
 - Domain: `Rediscraft::Domain::Store`.
 - Application: `Rediscraft::Application::CommandExecutor`.
 - Infrastructure: `Rediscraft::Infrastructure::AofLog`.
-- Interface: `Rediscraft::Interface::TcpServer` and `TextProtocol`.
+- Interface: `Rediscraft::Interface::TcpServer`, `TextProtocol`, and `Resp2Protocol`.
 
 This shape is intentionally small. It teaches where logic belongs without
 turning the project into framework ceremony.
@@ -51,8 +51,11 @@ Expired entries are removed lazily.
 
 ## 8. Performance Strategy
 
-The first strategy is correctness before speed. Benchmarks are deferred until
-the command set and durability behavior are stable.
+The first strategy was correctness before speed; the repo now has a local
+benchmark harness and a recorded baseline in
+[`benchmarks/baseline.md`](../benchmarks/baseline.md). The main lesson so far is
+not "Ruby is fast enough", but that one O(N) command (`INFO`) can stall the
+single-threaded reactor until the implementation is changed to O(1).
 
 ## 9. Scalability Strategy
 
@@ -68,8 +71,10 @@ networks only.
 
 ## 11. Observability
 
-The first release has tests and documented failure modes. `INFO`, counters, and
-structured logs are planned after core semantics.
+The first release now has tests, documented failure modes, and `INFO` keyspace
+gauges (`keys`, `keys_with_expiry`). A request counter and structured logs are
+still deferred until a shared metrics object justifies coupling the command
+executor to the TCP dispatch path.
 
 ## 12. Operational Cost
 
@@ -89,5 +94,6 @@ learning artifact for backend fundamentals.
 
 ## 15. What I Would Do Next
 
-Add `INFO`, AOF fsync policy, compaction, snapshots, RESP parsing, and local
-benchmarks in that order.
+Add an `INFO` request counter through a shared metrics object, auto-compaction
+by AOF growth ratio, AOF-on and slow-client benchmark profiles, bounded
+keyspace/eviction, and replication lessons in that order.
