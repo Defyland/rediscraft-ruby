@@ -164,3 +164,11 @@ benchmark measures (and what it deliberately does not), and
   concrete boundary lesson.
 - Add a bounded keyspace with `maxmemory` and an eviction policy.
 - Add primary/replica replication over the durable-command stream.
+
+## 20. License
+
+This repository is published under the MIT License. See
+[LICENSE.txt](LICENSE.txt).
+
+That keeps the event-loop server, durability model, and learning material
+reusable for study and internal experimentation.
