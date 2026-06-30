@@ -111,7 +111,41 @@ Key decisions live under [docs/adr](docs/adr). The first version chooses a text
 protocol before RESP, one process before clustering, and a mutex-protected hash
 before sharding.
 
-## 16. How to run locally
+## 16. How to evaluate this repo in 5 minutes
+
+For a fast technical review:
+
+```sh
+bin/check
+```
+
+Then prove the live TCP contract and append-only durability path in one shell:
+
+```sh
+ruby bin/rediscraft --host 127.0.0.1 --port 7480 --aof tmp/rediscraft-eval.aof
+```
+
+In another shell:
+
+```sh
+ruby -rsocket -e 'socket = TCPSocket.new("127.0.0.1", 7480); socket.puts("PING"); print socket.gets; socket.puts("SET eval:key hello"); print socket.gets; socket.puts("GET eval:key"); print socket.gets; socket.close'
+```
+
+Then run a small benchmark smoke:
+
+```sh
+ruby benchmarks/bench.rb --clients 4 --ops 200 --warmup 50 --keys 1000
+```
+
+What those checks prove:
+
+- `bin/check` keeps the syntax and test contract green.
+- The TCP round-trip proves the documented text protocol works end to end
+  against the real server process and AOF-backed runtime path.
+- The benchmark smoke proves the RESP2 benchmarking harness still runs end to
+  end and reports throughput plus latency percentiles.
+
+## 17. How to run locally
 
 ```sh
 ruby bin/rediscraft --host 127.0.0.1 --port 7379 --aof data/rediscraft.aof
@@ -125,7 +159,7 @@ Then connect:
 nc 127.0.0.1 7379
 ```
 
-## 17. How to run tests and benchmarks
+## 18. How to run tests and benchmarks
 
 ```sh
 bin/test
@@ -141,7 +175,7 @@ See [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md) for how the
 benchmark measures (and what it deliberately does not), and
 [benchmarks/baseline.md](benchmarks/baseline.md) for collected numbers.
 
-## 18. Failure scenarios
+## 19. Failure scenarios
 
 - A partial trailing AOF record is ignored during replay.
 - Expired keys are removed lazily on access and actively on a background cron tick.
@@ -156,7 +190,7 @@ benchmark measures (and what it deliberately does not), and
   durability depends on `fsync` (reasoned, not testable in-process).
 - The server is not safe for untrusted networks.
 
-## 19. Roadmap
+## 20. Roadmap
 
 - Add an `INFO` request counter once a shared metrics object justifies it.
 - Add auto-compaction by growth ratio on top of the existing manual compaction.
@@ -165,7 +199,7 @@ benchmark measures (and what it deliberately does not), and
 - Add a bounded keyspace with `maxmemory` and an eviction policy.
 - Add primary/replica replication over the durable-command stream.
 
-## 20. License
+## 21. License
 
 This repository is published under the MIT License. See
 [LICENSE.txt](LICENSE.txt).

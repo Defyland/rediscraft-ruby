@@ -2023,3 +2023,22 @@ contratuais ao estado real do repo e adicionar um teste pequeno que falha se
 esses artefatos voltarem a descrever features entregues como se ainda estivessem
 planejadas. A licao aqui e simples: benchmark, CI e observabilidade contam como
 especialismo so quando a documentacao publica acompanha a verdade do codigo.
+
+## 26. Um revisor barato precisa de trilha curta, nao so trilha completa
+
+Rediscraft ja tinha um README honesto, um walkthrough bom e bastante evidencia
+tecnica. O problema era outro: a trilha curta de verificacao ainda dependia de
+o leitor montar mentalmente o caminho entre `bin/check`, a subida do servidor e
+o benchmark. Para um revisor humano ocupado ou um modelo barato, isso aumenta o
+custo de confirmar que o repo faz o que promete.
+
+A melhoria certa nao foi adicionar mais superficie tecnica. Foi explicitar uma
+avaliacao de cinco minutos com tres provas diferentes e baratas: contrato local
+(`bin/check`), round-trip TCP real contra o processo com AOF, e benchmark smoke
+pequeno. Cada uma responde a uma pergunta diferente: "o repo esta verde?",
+"o protocolo funciona no processo real?", e "o harness de desempenho ainda roda?".
+
+A alternativa pior seria apontar o leitor para o walkthrough inteiro, para a
+metodologia de benchmark e para os comandos soltos em seco. Isso preserva toda
+informacao, mas nao preserva operabilidade. Quando o objetivo e ensinar
+backends, reduzir o caminho de verificacao tambem e parte do produto.
